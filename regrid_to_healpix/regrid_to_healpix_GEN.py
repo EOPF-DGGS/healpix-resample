@@ -1,5 +1,5 @@
 """
-regrid_to_healpix_psf.py
+regrid_to_healpix_GEN.py
 
 GPU-friendly sparse HEALPix regridding from unstructured lon/lat samples
 to a subset of HEALPix pixels at a target resolution (nside = 2**level).
@@ -22,10 +22,6 @@ def _lonlat_to_xyz(lon_rad: torch.Tensor, lat_rad: torch.Tensor) -> torch.Tensor
     return torch.stack([clat * torch.cos(lon_rad),
                         clat * torch.sin(lon_rad),
                         torch.sin(lat_rad)], dim=-1)  # (...,3)
-
-def _sigma_level_m(level: int, radius: float = 6371000.0) -> float:
-    # sigma = sqrt(4*pi / (12*4**level)) * R
-    return math.sqrt(4.0 * math.pi / (12.0 * (4.0 ** level))) * radius
 
 @torch.no_grad()
 def healpix_weighted_nearest(
@@ -82,10 +78,14 @@ def healpix_weighted_nearest(
     if nest:
         ipix1 = healpix_geo.nested.lonlat_to_healpix(lon_np, lat_np, level, num_threads=num_threads,ellipsoid=ellipsoid)
         ipix_u, inv = np.unique(ipix1.astype(np.uint64), return_inverse=True)
+        if Npt==1:
+            return torch.from_numpy(ipix_u.astype(np.int64)).to(dev), torch.from_numpy(inv.astype(np.int64)).to(dev),0            
         neigh_u_w = healpix_geo.nested.kth_neighbourhood(ipix_u, level, ring_weight, num_threads=num_threads)
     else:
         ipix1 = healpix_geo.ring.lonlat_to_healpix(lon_np, lat_np, level, num_threads=num_threads,ellipsoid=ellipsoid)
         ipix_u, inv = np.unique(ipix1.astype(np.uint64), return_inverse=True)
+        if Npt==1:
+            return torch.from_numpy(ipix_u.astype(np.int64)).to(dev), torch.from_numpy(inv.astype(np.int64)).to(dev),0
         neigh_u_w = healpix_geo.ring.kth_neighbourhood(ipix_u, level, ring_weight, num_threads=num_threads)
 
     # healpix_geo.kth_neighbourhood may return -1 for "invalid" neighbours.
@@ -231,109 +231,8 @@ def healpix_weighted_nearest(
     # Si certains points n’ont jamais trouvé Npt pixels gardés, on laisse -1/inf (ou on pourrait rendre moins que Npt)
     return cell_ids_keep, idx_out, dist_out
 
-from typing import Callable, Optional, Tuple, Dict
 
-@torch.no_grad()
-def conjugate_gradient(
-    A_mv: Callable[[torch.Tensor], torch.Tensor],
-    b: torch.Tensor,
-    x0: Optional[torch.Tensor] = None,
-    max_iter: int = 200,
-    tol: float = 1e-6,
-    verbose: bool = True,
-) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-    """
-    Solve A x = b with Conjugate Gradient where A is SPD, using only matvec A_mv(v).
-    No autograd (uses torch.no_grad).
-
-    Returns:
-        x: solution
-        info: dict with residual norms history, iterations
-    """
-    if x0 is None:
-        x = torch.zeros_like(b)
-    else:
-        x = x0.clone()
-
-    r = b - A_mv(x)          # residual
-    p = r.clone()
-    rs_old = torch.einsum('ik,ik->i',r,r)
-
-    b_norm = torch.linalg.norm(b)
-    if b_norm == 0:
-        return x, {"residual_norms": torch.tensor([0.0], device=b.device, dtype=b.dtype),
-                   "iters": torch.tensor(0, device=b.device)}
-
-    residual_norms = [torch.sqrt(rs_old)]
-
-    for k in range(max_iter):
-        Ap = A_mv(p)
-        denom = torch.einsum('ik,ik->i',p,Ap)
-        if torch.max(denom.abs()) < 1e-30:
-            break  # breakdown (shouldn't happen for SPD unless numerical issues)
-
-        alpha = rs_old / denom
-        x = x + torch.einsum('k,ki->ki',alpha,p)
-        r = r - torch.einsum('k,ki->ki',alpha,Ap)
-        rs_new = torch.einsum('ik,ik->i',r,r)
-
-        residual_norms.append(torch.sqrt(rs_new))
-
-        # stopping criterion: relative residual
-        if torch.max(torch.sqrt(rs_new)) <= tol * b_norm:
-            rs_old = rs_new
-            break
-
-        beta = rs_new / rs_old
-        p = r + torch.einsum('k,ki->ki',beta,p)
-        rs_old = rs_new
-        if k%4==0 and verbose:
-            print('Itt %d : %.4g'%(k,rs_old))
-
-    info = {
-        "residual_norms": torch.stack(residual_norms),
-        "iters": torch.tensor(len(residual_norms) - 1, device=b.device),
-    }
-    if verbose:
-        print('Final Itt %d : %.4g'%(k,rs_old))
-    return x, info
-
-@torch.no_grad()
-def least_squares_cg(M,
-        MT,
-        y,
-        x_ref,
-        x0, 
-        max_iter = 200,
-        tol = 1e-6,
-        damp = 0.0,
-        verbose: bool = True,
-        ):
-    """
-    Solve for delta in a damped least-squares problem without forming dense matrices.
-
-    We solve:
-        (MT @ M + damp*I) delta = (y - x_ref @ MT) @ M
-
-    Shapes:
-        M  : (N, K) sparse CSR
-        MT : (K, N) sparse CSR
-        y  : (B, N)
-        x_ref : (B, K)
-        delta : (B, K)
-    """
-
-    # b = M^T y
-    b = (y - x_ref@MT) @ M
-    def A_mv(v: torch.Tensor) -> torch.Tensor:
-        # (M^T M + damp I) v
-        return (v@MT) @ M + damp * v
-
-    x, info = conjugate_gradient(A_mv=A_mv, b=b, x0=x0, max_iter=max_iter, tol=tol,verbose=verbose)
-    return x, info
-
-
-class regrid_to_healpix_psf:
+class regrid_to_healpix_GEN:
     """GPU-friendly sparse HEALPix regridding via local Gaussian weights + CG deconvolution.
 
     This class builds two sparse operators from unstructured lon/lat samples to a subset
@@ -357,8 +256,6 @@ class regrid_to_healpix_psf:
         Npt: int,
         level: int,
         *,
-        sigma_m: Optional[float] = None,
-        threshold: float = 0.1,
         nest: bool = True,
         radius: float = 6371000.0,
         ellipsoid: str = "WGS84",
@@ -366,7 +263,7 @@ class regrid_to_healpix_psf:
         device: torch.device | str = "cuda",
         ring_weight: Optional[int] = None,
         ring_search_init: Optional[int] = None,
-        ring_search_max: int = 20,
+        ring_search_max: int = 2,
         num_threads: int = 0,
         verbose: bool = True,
     ) -> None:
@@ -391,8 +288,6 @@ class regrid_to_healpix_psf:
         self.threshold = float(threshold)
         self.dtype = dtype
         self.device = torch.device(device)
-
-        self.sigma_m = float(_sigma_level_m(level, radius=radius) if sigma_m is None else sigma_m)
 
         # --- move lon/lat to torch on target device (but healpix_geo needs CPU numpy internally)
         lon_t = lon_deg if isinstance(lon_deg, torch.Tensor) else torch.as_tensor(lon_deg)
@@ -427,11 +322,16 @@ class regrid_to_healpix_psf:
         # Store geometry outputs
         self.cell_ids = cell_ids.to(torch.long).to(self.device)   # (K,)
         self.hi = hi.to(torch.long).to(self.device)               # (N,Npt) indices into cell_ids
-        self.d_m = d.to(self.dtype).to(self.device)               # (N,Npt) meters
+        if Npt>1:
+            self.d_m = d.to(self.dtype).to(self.device)               # (N,Npt) meters
         self.N = int(lon_t.numel())
         self.K = int(self.cell_ids.numel())
         self.verbose = verbose
 
+        self.M,self.MT = self.comp_matrix()
+        
+    def comp_matrix(self):
+        
         # --- weights per sample->cell link
         # w = exp(-2*d^2/sigma^2)
         w = torch.exp((-2.0) * (self.d_m * self.d_m) / (self.sigma_m * self.sigma_m))
@@ -486,7 +386,7 @@ class regrid_to_healpix_psf:
         self.MT = MT_coo.to_sparse_csr()
 
     @torch.no_grad()
-    def transform(self, hval: torch.Tensor) -> torch.Tensor:
+    def invert(self, hval: torch.Tensor) -> torch.Tensor:
         """Project HEALPix field back to the sample locations.
 
         Args:
@@ -499,7 +399,7 @@ class regrid_to_healpix_psf:
         return hval @ self.MT
 
     @torch.no_grad()
-    def fit(
+    def transform(
         self,
         val: torch.Tensor | np.ndarray,
         *,
@@ -528,34 +428,10 @@ class regrid_to_healpix_psf:
             y = y[None, :]
 
         # reference field (B,K)
-        x_ref = y @ self.M
-
-        if x0 is None:
-            x0 = torch.zeros_like(x_ref)
-        else:
-            x0 = x0.to(self.device, dtype=self.dtype)
-
-        delta, info = least_squares_cg(
-            M=self.M,
-            MT=self.MT,
-            y=y,
-            x_ref=x_ref,
-            x0=x0,
-            max_iter=max_iter,
-            tol=tol,
-            damp=float(lam),
-            verbose=self.verbose,
-        )
-
-        hval = delta + x_ref
-        if val is not None and isinstance(val, torch.Tensor) and val.ndim == 1:
-            hval = hval[0]
-        if return_info:
-            return hval, info
-        return hval
+        return y @ self.M
 
     @torch.no_grad()
-    def fit_transform(
+    def fit_invert(
         self,
         val: torch.Tensor | np.ndarray,
         *,
@@ -566,7 +442,7 @@ class regrid_to_healpix_psf:
         return_info: bool = False,
     ):
         """Fit HEALPix field and return the reconstructed values at sample points."""
-        out = self.fit(val, lam=lam, max_iter=max_iter, tol=tol, x0=x0, return_info=return_info)
+        out = self.transform(val, lam=lam, max_iter=max_iter, tol=tol, x0=x0, return_info=return_info)
         if return_info:
             hval, info = out
         else:
