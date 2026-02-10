@@ -9,12 +9,14 @@ Core ideas:
 
 This module is designed for large N and batched values (B,N) on CUDA.
 """
+from .regrid_to_healpix_GEN import Set as GENSet
+import math
+import numpy as np
+import torch
 
-from regrid_to_healpix import regrid_to_healpix_GEN
 
-class regrid_to_healpix_nearest(regrid_to_healpix_GEN):
+class Set(GENSet):
     def __init__(self, *args, **kwargs):
-        # Impose que use_2D=True pour la classe scat
         super().__init__(Npt=1, *args, **kwargs)
         
     def comp_matrix(self):
@@ -28,10 +30,10 @@ class regrid_to_healpix_nearest(regrid_to_healpix_GEN):
         # -------- M : (N,K)  (normalized per column / per healpix cell)
         # norm_col[k] = sum_{i links to k} w[i,k]
         flat_hi = self.hi.reshape(-1)
-        w = torch.ones(self.N, device=self.device, dtype=torch.dtype)
+        w = torch.ones((self.N,), device=self.device, dtype=self.dtype)
 
 
-        rowsM = idx.reshape(-1)[valid]
+        rowsM = idx.reshape(-1)
         colsM = flat_hi
         indicesM = torch.stack([rowsM, colsM], dim=0)
         M_coo = torch.sparse_coo_tensor(

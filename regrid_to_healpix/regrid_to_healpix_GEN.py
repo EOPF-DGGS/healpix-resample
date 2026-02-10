@@ -23,6 +23,10 @@ def _lonlat_to_xyz(lon_rad: torch.Tensor, lat_rad: torch.Tensor) -> torch.Tensor
                         clat * torch.sin(lon_rad),
                         torch.sin(lat_rad)], dim=-1)  # (...,3)
 
+def _sigma_level_m(level: int, radius: float = 6371000.0) -> float:
+    # sigma = sqrt(4*pi / (12*4**level)) * R
+    return math.sqrt(4.0 * math.pi / (12.0 * (4.0 ** level))) * radius
+    
 @torch.no_grad()
 def healpix_weighted_nearest(
     longitude1: torch.Tensor,          # (N,) degrés
@@ -71,6 +75,9 @@ def healpix_weighted_nearest(
     if ring_search_init is None:
         ring_search_init = max(1, r_min + 1)
 
+    # --- distances: on peut les faire sur GPU si dispo
+    dev = device_for_dist if device_for_dist is not None else longitude1.device
+    
     # --- CPU numpy pour healpix_geo
     lon_np = longitude1.detach().cpu().numpy().astype(np.float64)
     lat_np = latitude1.detach().cpu().numpy().astype(np.float64)
@@ -123,8 +130,6 @@ def healpix_weighted_nearest(
     else:
         lon_c_deg, lat_c_deg = healpix_geo.ring.healpix_to_lonlat(neigh_w_uniq, level,ellipsoid=ellipsoid)
 
-    # --- distances: on peut les faire sur GPU si dispo
-    dev = device_for_dist if device_for_dist is not None else longitude1.device
     lon1 = torch.deg2rad(longitude1.to(dev))
     lat1 = torch.deg2rad(latitude1.to(dev))
     xyz1 = _lonlat_to_xyz(lon1, lat1)  # (N,3)
@@ -232,7 +237,7 @@ def healpix_weighted_nearest(
     return cell_ids_keep, idx_out, dist_out
 
 
-class regrid_to_healpix_GEN:
+class Set:
     """GPU-friendly sparse HEALPix regridding via local Gaussian weights + CG deconvolution.
 
     This class builds two sparse operators from unstructured lon/lat samples to a subset
@@ -285,7 +290,6 @@ class regrid_to_healpix_GEN:
         self.nest = bool(nest)
         self.radius = float(radius)
         self.ellipsoid = str(ellipsoid)
-        self.threshold = float(threshold)
         self.dtype = dtype
         self.device = torch.device(device)
 
@@ -302,10 +306,10 @@ class regrid_to_healpix_GEN:
             level=self.level,
             Npt=self.Npt,
             nest=self.nest,
-            threshold=self.threshold,
+            threshold=0.0,
             radius=self.radius,
             ellipsoid=self.ellipsoid,
-            sigma_m=self.sigma_m,
+            sigma_m=None,
             ring_weight=ring_weight,
             ring_search_init=ring_search_init,
             ring_search_max=ring_search_max,
@@ -328,7 +332,7 @@ class regrid_to_healpix_GEN:
         self.K = int(self.cell_ids.numel())
         self.verbose = verbose
 
-        self.M,self.MT = self.comp_matrix()
+        self.comp_matrix()
         
     def comp_matrix(self):
         
