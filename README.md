@@ -1,12 +1,15 @@
 # regrid_to_healpix
 
 `regrid_to_healpix` is a lightweight Python package designed to regrid
-data defined on irregular longitude--latitude coordinates onto a HEALPix
+data defined on longitude--latitude coordinates onto a HEALPix
 grid.
 
 The package provides GPU-accelerated operators (via PyTorch) to
 construct sparse linear mappings between input geodetic coordinates and
 a target HEALPix tessellation at a chosen resolution level.
+
+This package manages the HEALPix authalic definition and the Earth
+ellipsoid using the **WGS84** reference system.
 
 ## Objectives
 
