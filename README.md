@@ -38,6 +38,81 @@ The main goals of the package are:
 -   Torch-based implementation for CPU/GPU flexibility
 -   Resolution controlled via HEALPix level parameter
 
+## Installation (Private Repository)
+
+This package is distributed as a **private repository** and must be installed from source.
+
+---
+
+### Clone the repository
+
+```bash
+git clone https://<your-private-repo-url>/regrid_to_healpix.git
+cd regrid_to_healpix
+```
+
+If you use SSH access:
+
+```bash
+git clone git@<your-private-repo-host>:regrid_to_healpix.git
+cd regrid_to_healpix
+```
+
+---
+
+### Install in editable mode (recommended for development)
+
+```bash
+pip install -e .
+```
+
+Editable mode allows you to modify the source code without reinstalling the package after each change.
+
+---
+
+### Standard installation (optional)
+
+If you do not need editable mode:
+
+```bash
+pip install .
+```
+
+---
+
+### Requirements
+
+Make sure you are using:
+
+- Python ≥ 3.8
+- A working PyTorch installation (CPU or CUDA)
+- numpy
+- healpy
+
+It is strongly recommended to use a virtual environment:
+
+```bash
+python -m venv venv
+source venv/bin/activate   # Linux / macOS
+# or
+venv\Scripts\activate    # Windows
+
+pip install -U pip
+```
+
+---
+
+### Verifying the installation
+
+After installation:
+
+```python
+import regrid_to_healpix
+print(regrid_to_healpix.__file__)
+```
+
+If no error occurs, the installation is successful.
+
 ## Typical Use Case
 
 ``` python
