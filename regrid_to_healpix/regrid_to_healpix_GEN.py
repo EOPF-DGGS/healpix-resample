@@ -296,7 +296,7 @@ class Set:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             if device.startswith("cuda") and not torch.cuda.is_available():
-            raise RuntimeError("CUDA requested but not available.")
+                raise RuntimeError("CUDA requested but not available.")
 
         self.device = torch.device(device)
         self.threshold = float(threshold)
