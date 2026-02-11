@@ -47,14 +47,14 @@ This package is distributed as a **private repository** and must be installed fr
 ### Clone the repository
 
 ```bash
-git clone https://<your-private-repo-url>/regrid_to_healpix.git
+git clone https://github.com/EOPF-DGGS/regrid_to_healpix.git
 cd regrid_to_healpix
 ```
 
 If you use SSH access:
 
 ```bash
-git clone git@<your-private-repo-host>:regrid_to_healpix.git
+git clone git@EOPF-DGGS:regrid_to_healpix.git
 cd regrid_to_healpix
 ```
 
