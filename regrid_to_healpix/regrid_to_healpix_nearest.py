@@ -32,24 +32,27 @@ class Set(GENSet):
         flat_hi = self.hi.reshape(-1)
         w = torch.ones((self.N,), device=self.device, dtype=self.dtype)
 
+        norm_row = torch.bincount(flat_hi, weights=w, minlength=self.N).to(self.dtype)
+        wM = w / norm_row[flat_hi]
 
         rowsM = idx.reshape(-1)
         colsM = flat_hi
         indicesM = torch.stack([rowsM, colsM], dim=0)
         M_coo = torch.sparse_coo_tensor(
             indicesM,
-            w,
+            wM,
             size=(self.N, self.K),
             device=self.device,
             dtype=self.dtype,
         ).coalesce()
 
         # -------- MT : (K,N) (normalized per row / per input sample)
-        
+        norm_row = torch.bincount(idx, weights=w, minlength=self.N).to(self.dtype)
+        wMT = w / norm_row[idx]
         indicesMT = torch.stack([colsM, rowsM], dim=0)  # (hi, idx)
         MT_coo = torch.sparse_coo_tensor(
             indicesMT,
-            w,
+            wMT,
             size=(self.K, self.N),
             device=self.device,
             dtype=self.dtype,

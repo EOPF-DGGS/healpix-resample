@@ -38,7 +38,7 @@ def healpix_weighted_nearest(
     threshold: float = 0.1,
     radius: float = 6371000.0,
     ellipsoid: str = "WGS84",
-    sigma_m: Optional[float] = None,
+    sigma: float = None,
     # voisinage utilisé pour estimer les poids (construction cell_ids)
     ring_weight: Optional[int] = None,
     # voisinage utilisé pour trouver Npt voisins parmi les pixels gardés (peut être augmenté automatiquement)
@@ -64,9 +64,7 @@ def healpix_weighted_nearest(
 
     import healpix_geo  # pip install healpix-geo
 
-    # --- sigma in meters (controls the Gaussian weights used for thresholding)
-    sigma = float(_sigma_level_m(level, radius=radius) if sigma_m is None else sigma_m)
-
+    
     # --- choix rings par défaut
     # ring minimal pour avoir >= Npt candidats dans un carré (2r+1)^2, + marge
     r_min = int(math.ceil((math.sqrt(Npt) - 1.0) / 2.0))
@@ -270,6 +268,8 @@ class Set:
         ring_search_init: Optional[int] = None,
         ring_search_max: int = 2,
         num_threads: int = 0,
+        threshold: float = 0.1,
+        sigma_m: float = None,
         verbose: bool = True,
     ) -> None:
         """Pre-compute sparse operators.
@@ -292,6 +292,10 @@ class Set:
         self.ellipsoid = str(ellipsoid)
         self.dtype = dtype
         self.device = torch.device(device)
+        self.threshold = float(threshold)
+        # --- sigma in meters (controls the Gaussian weights used for thresholding)
+        sigma = float(_sigma_level_m(level, radius=radius) if sigma_m is None else sigma_m)
+        self.sigma_m = sigma
 
         # --- move lon/lat to torch on target device (but healpix_geo needs CPU numpy internally)
         lon_t = lon_deg if isinstance(lon_deg, torch.Tensor) else torch.as_tensor(lon_deg)
@@ -306,10 +310,10 @@ class Set:
             level=self.level,
             Npt=self.Npt,
             nest=self.nest,
-            threshold=0.0,
+            threshold=self.threshold,
             radius=self.radius,
             ellipsoid=self.ellipsoid,
-            sigma_m=None,
+            sigma=self.sigma_m,
             ring_weight=ring_weight,
             ring_search_init=ring_search_init,
             ring_search_max=ring_search_max,
@@ -390,7 +394,7 @@ class Set:
         self.MT = MT_coo.to_sparse_csr()
 
     @torch.no_grad()
-    def invert(self, hval: torch.Tensor) -> torch.Tensor:
+    def invert(self, hval: torch.Tensor | np.ndarray,) -> torch.Tensor:
         """Project HEALPix field back to the sample locations.
 
         Args:
@@ -398,9 +402,17 @@ class Set:
         Returns:
             val_hat: (B,N) or (N,)
         """
+        y = hval if isinstance(hval, torch.Tensor) else torch.as_tensor(hval)
+        y = y.to(self.device, dtype=self.dtype)
         if hval.ndim == 1:
-            return (hval[None, :] @ self.MT)[0]
-        return hval @ self.MT
+            res = (y[None, :] @ self.MT)[0]
+        else:
+            res =  y @ self.MT
+        
+        if not isinstance(hval, torch.Tensor):
+            res=res.cpu().numpy()
+        
+        return res
 
     @torch.no_grad()
     def transform(
@@ -428,44 +440,19 @@ class Set:
         """
         y = val if isinstance(val, torch.Tensor) else torch.as_tensor(val)
         y = y.to(self.device, dtype=self.dtype)
+        clean_shape=False
         if y.ndim == 1:
+            clean_shape=True
             y = y[None, :]
 
         # reference field (B,K)
-        return y @ self.M
-
-    @torch.no_grad()
-    def fit_invert(
-        self,
-        val: torch.Tensor | np.ndarray,
-        *,
-        lam: float = 0.0,
-        max_iter: int = 100,
-        tol: float = 1e-8,
-        x0: Optional[torch.Tensor] = None,
-        return_info: bool = False,
-    ):
-        """Fit HEALPix field and return the reconstructed values at sample points."""
-        out = self.transform(val, lam=lam, max_iter=max_iter, tol=tol, x0=x0, return_info=return_info)
-        if return_info:
-            hval, info = out
-        else:
-            hval = out
-
-        y = val if isinstance(val, torch.Tensor) else torch.as_tensor(val)
-        y = y.to(self.device, dtype=self.dtype)
-        if y.ndim == 1:
-            y = y[None, :]
-
-        if hval.ndim == 1:
-            tilde_val = (hval[None, :] @ self.MT)
-            tilde_val = tilde_val[0]
-        else:
-            tilde_val = hval @ self.MT
-
-        if return_info:
-            return hval, tilde_val, info
-        return hval, tilde_val
+        res = y @ self.M
+        
+        if not isinstance(val, torch.Tensor):
+            res=res.cpu().numpy()
+        if clean_shape:
+            return res[0]
+        return res
         
     def get_cell_ids(self):
         return self.cell_ids.cpu().numpy()
