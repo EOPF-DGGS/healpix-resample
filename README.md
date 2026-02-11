@@ -87,20 +87,7 @@ Make sure you are using:
 - Python ≥ 3.8
 - A working PyTorch installation (CPU or CUDA)
 - numpy
-- healpy
-
-It is strongly recommended to use a virtual environment:
-
-```bash
-python -m venv venv
-source venv/bin/activate   # Linux / macOS
-# or
-venv\Scripts\activate    # Windows
-
-pip install -U pip
-```
-
----
+- healpix-geo
 
 ### Verifying the installation
 
