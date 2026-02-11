@@ -263,7 +263,7 @@ class Set:
         radius: float = 6371000.0,
         ellipsoid: str = "WGS84",
         dtype: torch.dtype = torch.float64,
-        device: torch.device | str = "cuda",
+        device: torch.device | str = None,
         ring_weight: Optional[int] = None,
         ring_search_init: Optional[int] = None,
         ring_search_max: int = 2,
@@ -291,6 +291,13 @@ class Set:
         self.radius = float(radius)
         self.ellipsoid = str(ellipsoid)
         self.dtype = dtype
+        
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            if device.startswith("cuda") and not torch.cuda.is_available():
+            raise RuntimeError("CUDA requested but not available.")
+
         self.device = torch.device(device)
         self.threshold = float(threshold)
         # --- sigma in meters (controls the Gaussian weights used for thresholding)
