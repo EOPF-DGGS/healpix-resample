@@ -54,7 +54,7 @@ cd regrid_to_healpix
 If you use SSH access:
 
 ```bash
-git clone git@EOPF-DGGS:regrid_to_healpix.git
+git clone git@github.com:EOPF-DGGS/regrid_to_healpix.git
 cd regrid_to_healpix
 ```
 
