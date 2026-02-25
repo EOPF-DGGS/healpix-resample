@@ -118,17 +118,48 @@ def least_squares_cg(M,
     x, info = conjugate_gradient(A_mv=A_mv, b=b, x0=x0, max_iter=max_iter, tol=tol,verbose=verbose)
     return x, info
 
-from .regrid_to_healpix_GEN import _sigma_level_m
+from .regrid_to_healpix_GEN import _sigma_level_m, _lonlat_to_xyz
 
 class Set(GENSet):
-    def __init__(self,Npt=9,sigma_m=None,threshold=0.1, *args, **kwargs):
-        super().__init__(Npt=Npt,sigma_m=sigma_m,threshold=threshold, *args, **kwargs)
+    def __init__(
+        self,
+        lon_deg,
+        lat_deg,
+        level: int,
+        *,
+        out_cell_ids=None,
+        device: str = "cpu",
+        dtype: torch.dtype = torch.float32,
+        verbose: bool = False,
+        ellipsoid: str = "WGS84",
+        Npt: int = 9,
+        sigma_m=None,
+        threshold: float = 0.1,
+        **kwargs,
+    ):
+        """
+        PSF regridding Set.
+        """
+        super().__init__(
+            lon_deg=lon_deg,
+            lat_deg=lat_deg,
+            level=level,
+            out_cell_ids=out_cell_ids,
+            device=device,
+            dtype=dtype,
+            verbose=verbose,
+            ellipsoid=ellipsoid,
+            Npt=Npt,
+            sigma_m=sigma_m,
+            threshold=threshold,
+            **kwargs,
+        )
 
     def comp_matrix(self):
         # --- weights per sample->cell link
         # w = exp(-2*d^2/sigma^2)
         w = torch.exp((-2.0) * (self.d_m * self.d_m) / (self.sigma_m * self.sigma_m))
-
+        
         # Build (N,K) operator M and (K,N) operator MT.
         # We avoid numpy bincount; use torch.bincount on GPU.
 
@@ -146,7 +177,7 @@ class Set(GENSet):
         norm_col = torch.bincount(flat_hi_v, weights=flat_w_v, minlength=self.K).to(self.dtype)
         # weight divided by column sum
         wM = flat_w_v / norm_col[flat_hi_v]
-
+        
         rowsM = idx.reshape(-1)[valid]
         colsM = flat_hi_v
         indicesM = torch.stack([rowsM, colsM], dim=0)
@@ -157,6 +188,8 @@ class Set(GENSet):
             device=self.device,
             dtype=self.dtype,
         ).coalesce()
+            
+        # --- after initial M_coo = ... .coalesce()
 
         # -------- MT : (K,N) (normalized per row / per input sample)
         # norm_row[i] = sum_{k links from i} w[i,k]
@@ -164,19 +197,167 @@ class Set(GENSet):
         flat_idx_v = flat_idx[valid]
         norm_row = torch.bincount(flat_idx_v, weights=flat_w_v, minlength=self.N).to(self.dtype)
         wMT = flat_w_v / norm_row[flat_idx_v]
-
+            
         indicesMT = torch.stack([colsM, rowsM], dim=0)  # (hi, idx)
         MT_coo = torch.sparse_coo_tensor(
-            indicesMT,
-            wMT.to(self.dtype),
-            size=(self.K, self.N),
-            device=self.device,
-            dtype=self.dtype,
-        ).coalesce()
+                indicesMT,
+                wMT.to(self.dtype),
+                size=(self.K, self.N),
+                device=self.device,
+                dtype=self.dtype,
+            ).coalesce()
+            
+        
+        cell_out_ids = getattr(self, "cell_out_ids", None)
+        if cell_out_ids is None:
+            cell_out_ids = getattr(self, "out_cell_ids", None)
 
+        if cell_out_ids is not None:
+            # weak/empty columns in M (per output healpix cell k)
+            bad_k = torch.nonzero(norm_col <= self.threshold).reshape(-1)
+              
+            if bad_k.numel() > 0:
+                
+                # Require geometry buffers (unit vectors)
+                if (not hasattr(self, "xyz_samples")) or (not hasattr(self, "xyz_cells")):
+                    raise RuntimeError(
+                        "Fallback for missing out_cell_ids columns requires "
+                        "self.xyz_samples (N,3) and self.xyz_cells (K,3)."
+                    )
+
+                # We'll REPLACE these columns: remove their current entries first
+                I = M_coo.indices()
+                V = M_coo.values()
+                rows0 = I[0]
+                cols0 = I[1]
+
+                bad_set = set(int(x) for x in bad_k.detach().cpu().numpy().astype(np.int64))
+                keep_mask = torch.ones_like(cols0, dtype=torch.bool)
+                for kb in bad_set:
+                    keep_mask &= (cols0 != int(kb))
+
+                base_rows = rows0[keep_mask]
+                base_cols = cols0[keep_mask]
+                base_vals = V[keep_mask]
+
+                # Fallback parameters (bilinear spirit)
+                Npt_fallback = 1          # like bilinear
+                eps = 1e-6
+                sigma = float(self.sigma_m) if hasattr(self, "sigma_m") else 1.0
+
+                add_rows, add_cols, add_vals = [], [], []
+                
+                # For each bad column, pick the closest source sample
+                for kb in range(len(bad_k)):
+                    kb = int(kb)
+                    # cosine similarity between all samples and the cell center
+                    # (N,) = (N,3) @ (3,)
+                    u = self.xyz_samples              # (N,3)
+                    v = self.xyz_cells[bad_k[kb]]            # (3,)
+
+                    dots = torch.sum((u - v)*(u - v), dim=1)    # (N,)
+
+
+                    # take top-Npt_fallback closest (largest dot = smallest angular distance)
+                    topv, topi = torch.topk(dots, k=min(Npt_fallback, self.N), largest=False)
+                    
+                    add_rows.append(topi.to(torch.long))
+                    add_cols.append(torch.tensor(bad_k[kb:kb+1], dtype=torch.long))
+                    add_vals.append(torch.ones([1], dtype=self.dtype,device=self.device))
+
+                add_rows = torch.cat(add_rows, dim=0)
+                add_cols = torch.cat(add_cols, dim=0)
+                add_vals = torch.cat(add_vals, dim=0)
+                
+                # rebuild M and coalesce
+                new_rows = torch.cat([base_rows, add_rows], dim=0)
+                new_cols = torch.cat([base_cols, add_cols], dim=0)
+                new_vals = torch.cat([base_vals, add_vals], dim=0)
+                
+                M_coo = torch.sparse_coo_tensor(
+                    torch.stack([new_rows, new_cols], dim=0),
+                    new_vals,
+                    size=(self.N, self.K),
+                    device=self.device,
+                    dtype=self.dtype,
+                ).coalesce()
+                
+                
+            # do the same fo the transpose
+            # weak/empty columns in M (per output healpix cell k)
+            bad_k = torch.nonzero(norm_row <= self.threshold).reshape(-1)
+              
+            if bad_k.numel() > 0:
+                
+                # Require geometry buffers (unit vectors)
+                if (not hasattr(self, "xyz_samples")) or (not hasattr(self, "xyz_cells")):
+                    raise RuntimeError(
+                        "Fallback for missing out_cell_ids columns requires "
+                        "self.xyz_samples (N,3) and self.xyz_cells (K,3)."
+                    )
+
+                # We'll REPLACE these columns: remove their current entries first
+                I = MT_coo.indices()
+                V = MT_coo.values()
+                rows0 = I[0]
+                cols0 = I[1]
+
+                bad_set = set(int(x) for x in bad_k.detach().cpu().numpy().astype(np.int64))
+                keep_mask = torch.ones_like(cols0, dtype=torch.bool)
+                for kb in bad_set:
+                    keep_mask &= (cols0 != int(kb))
+
+                base_rows = rows0[keep_mask]
+                base_cols = cols0[keep_mask]
+                base_vals = V[keep_mask]
+
+                # Fallback parameters (bilinear spirit)
+                Npt_fallback = 1          # like bilinear
+                eps = 1e-6
+                sigma = float(self.sigma_m) if hasattr(self, "sigma_m") else 1.0
+
+                add_rows, add_cols, add_vals = [], [], []
+                
+                # For each bad column, pick the closest source sample
+                for kb in range(len(bad_k)):
+                    kb = int(kb)
+                    # cosine similarity between all samples and the cell center
+                    # (N,) = (N,3) @ (3,)
+                    u = self.xyz_samples[bad_k[kb]]      # (3)
+                    v = self.xyz_cells            # (K,3)
+
+                    dots = torch.sum((u - v)*(u - v), dim=1)    # (N,)
+
+
+                    # take top-Npt_fallback closest (largest dot = smallest angular distance)
+                    topv, topi = torch.topk(dots, k=min(Npt_fallback, self.K), largest=False)
+                    
+                    add_rows.append(topi.to(torch.long))
+                    add_cols.append(torch.tensor(bad_k[kb:kb+1], dtype=torch.long))
+                    add_vals.append(torch.ones([1], dtype=self.dtype,device=self.device))
+
+                add_rows = torch.cat(add_rows, dim=0)
+                add_cols = torch.cat(add_cols, dim=0)
+                add_vals = torch.cat(add_vals, dim=0)
+                
+                # rebuild M and coalesce
+                new_rows = torch.cat([base_rows, add_rows], dim=0)
+                new_cols = torch.cat([base_cols, add_cols], dim=0)
+                new_vals = torch.cat([base_vals, add_vals], dim=0)
+                
+                MT_coo = torch.sparse_coo_tensor(
+                    torch.stack([new_rows, new_cols], dim=0),
+                    new_vals,
+                    size=(self.K, self.N),
+                    device=self.device,
+                    dtype=self.dtype,
+                ).coalesce() 
+                
         # Convert to CSR for faster spMM (recommended on GPU)
-        self.M  = M_coo.to_sparse_csr()
+        self.M  = M_coo #.to_sparse_csr()
+        del M_coo
         self.MT = MT_coo.to_sparse_csr()
+        del MT_coo
 
     @torch.no_grad()
     def transform(
@@ -211,7 +392,7 @@ class Set(GENSet):
 
         # reference field (B,K)
         x_ref = y @ self.M
-
+        
         if x0 is None:
             x0 = torch.zeros_like(x_ref)
         else:
@@ -228,8 +409,9 @@ class Set(GENSet):
             damp=float(lam),
             verbose=self.verbose,
         )
-
+        
         hval = delta + x_ref
+        
         if val is not None and val.ndim == 1:
             hval = hval[0]
         if not isinstance(val, torch.Tensor):

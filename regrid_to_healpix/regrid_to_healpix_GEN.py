@@ -15,7 +15,7 @@ This module is designed for large N and batched values (B,N) on CUDA.
 import math
 import numpy as np
 import torch
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 
 def _lonlat_to_xyz(lon_rad: torch.Tensor, lat_rad: torch.Tensor) -> torch.Tensor:
     clat = torch.cos(lat_rad)
@@ -39,6 +39,8 @@ def healpix_weighted_nearest(
     radius: float = 6371000.0,
     ellipsoid: str = "WGS84",
     sigma: float = None,
+    # sous-ensemble de pixels de sortie autorisés (en ids healpix au même "level")
+    out_cell_ids: Optional[Union[np.ndarray, torch.Tensor]] = None,
     # voisinage utilisé pour estimer les poids (construction cell_ids)
     ring_weight: Optional[int] = None,
     # voisinage utilisé pour trouver Npt voisins parmi les pixels gardés (peut être augmenté automatiquement)
@@ -49,7 +51,7 @@ def healpix_weighted_nearest(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Retourne:
-      cell_ids: (K,) pixels HEALPix (au level) retenus par le seuil de poids
+      cell_ids: (K,) pixels HEALPix (au level) retenus par le seuil de poids (et éventuellement intersectés avec out_cell_ids)
       idx_k   : (N, Npt) indices dans cell_ids (0..K-1), -1 si insuffisant
       dist_k  : (N, Npt) distances (m) vers centres des pixels correspondants, inf si insuffisant
 
@@ -176,6 +178,37 @@ def healpix_weighted_nearest(
     # xyz des pixels retenus (K,3)
     xyz_keep = xyz_c[keep_idx]
 
+
+    # --- optionnel: restreindre explicitement les pixels de sortie
+    # out_cell_ids peut être une liste/array/torch tensor d'ids HEALPix (au même level).
+    if out_cell_ids is not None:
+        out_t = out_cell_ids if isinstance(out_cell_ids, torch.Tensor) else torch.as_tensor(out_cell_ids)
+        out_t = out_t.to(device=dev, dtype=torch.long).reshape(-1)
+        if out_t.numel() == 0:
+            # sous-ensemble vide demandé -> rien à regriller
+            cell_ids = torch.empty((0,), device=dev, dtype=torch.long)
+            idx_k = torch.full((N, Npt), -1, device=dev, dtype=torch.long)
+            dist_k = torch.full((N, Npt), float("inf"), device=dev, dtype=lon1.dtype)
+            return cell_ids, idx_k, dist_k
+
+        out_sorted = torch.unique(out_t)
+        out_sorted, _ = torch.sort(out_sorted)
+
+        # test d'appartenance robuste via searchsorted (évite dépendre de torch.isin)
+        pos_out = torch.searchsorted(out_sorted, cell_ids_keep)
+        pos_out = torch.clamp(pos_out, 0, out_sorted.numel() - 1)
+        in_mask = (out_sorted[pos_out] == cell_ids_keep)
+
+        if not torch.any(in_mask):
+            cell_ids = torch.empty((0,), device=dev, dtype=torch.long)
+            idx_k = torch.full((N, Npt), -1, device=dev, dtype=torch.long)
+            dist_k = torch.full((N, Npt), float("inf"), device=dev, dtype=lon1.dtype)
+            return cell_ids, idx_k, dist_k
+
+        keep_idx = keep_idx[in_mask]
+        cell_ids_keep = cell_ids_keep[in_mask]
+        xyz_keep = xyz_c[keep_idx]
+
     # --- pour chaque point: trouver Npt pixels retenus les plus proches
     # Stratégie: voisinage healpix autour du pixel contenant le point, ring qui s’agrandit
     # On mappe les pixels du voisinage -> indices dans cell_ids_keep via tri+searchsorted.
@@ -271,6 +304,7 @@ class Set:
         threshold: float = 0.1,
         sigma_m: float = None,
         verbose: bool = True,
+        out_cell_ids: Optional[Union[np.ndarray, torch.Tensor]] = None,
     ) -> None:
         """Pre-compute sparse operators.
 
@@ -300,6 +334,7 @@ class Set:
 
         self.device = torch.device(device)
         self.threshold = float(threshold)
+        self.out_cell_ids = out_cell_ids
         # --- sigma in meters (controls the Gaussian weights used for thresholding)
         sigma = float(_sigma_level_m(level, radius=radius) if sigma_m is None else sigma_m)
         self.sigma_m = sigma
@@ -309,6 +344,10 @@ class Set:
         lat_t = lat_deg if isinstance(lat_deg, torch.Tensor) else torch.as_tensor(lat_deg)
         lon_t = lon_t.to(self.device)
         lat_t = lat_t.to(self.device)
+        
+        if self.out_cell_ids is not None:
+            self.xyz_samples = _lonlat_to_xyz(torch.deg2rad(lon_t),torch.deg2rad(lat_t))  # (N,3)
+            
 
         # --- get kept healpix cells + per-sample nearest indices + distances
         cell_ids, hi, d = healpix_weighted_nearest(
@@ -321,12 +360,14 @@ class Set:
             radius=self.radius,
             ellipsoid=self.ellipsoid,
             sigma=self.sigma_m,
+            out_cell_ids=self.out_cell_ids,
             ring_weight=ring_weight,
             ring_search_init=ring_search_init,
             ring_search_max=ring_search_max,
             num_threads=num_threads,
             device_for_dist=self.device,
         )
+            
 
         if cell_ids.numel() == 0:
             raise RuntimeError(
@@ -343,6 +384,25 @@ class Set:
         self.K = int(self.cell_ids.numel())
         self.verbose = verbose
 
+        if self.out_cell_ids is not None:
+            
+            # --- geometry buffers for optional fallbacks (e.g. when out_cell_ids forces empty columns)
+
+            import healpix_geo  # pip install healpix-geo
+
+            # unit vectors for output HEALPix cell centers (K,3)
+            cell_np = self.cell_ids.detach().cpu().numpy().astype(np.uint64)
+            
+            if self.nest:
+                lon_c_deg, lat_c_deg = healpix_geo.nested.healpix_to_lonlat(cell_np, self.level, ellipsoid=self.ellipsoid)
+            else:
+                lon_c_deg, lat_c_deg = healpix_geo.ring.healpix_to_lonlat(cell_np, self.level, ellipsoid=self.ellipsoid)
+
+            lon_c = torch.deg2rad(torch.as_tensor(lon_c_deg, device=self.device, dtype=self.xyz_samples.dtype))
+            lat_c = torch.deg2rad(torch.as_tensor(lat_c_deg, device=self.device, dtype=self.xyz_samples.dtype))
+            
+            self.xyz_cells = _lonlat_to_xyz(lon_c, lat_c)  # (K,3)
+            
         self.comp_matrix()
         
     def comp_matrix(self):
