@@ -63,9 +63,8 @@ def healpix_weighted_nearest(
     assert longitude1.ndim == latitude1.ndim == 1
     N = int(longitude1.numel())
     assert Npt >= 1
-
+    
     import healpix_geo  # pip install healpix-geo
-
     
     # --- choix rings par défaut
     # ring minimal pour avoir >= Npt candidats dans un carré (2r+1)^2, + marge
@@ -305,6 +304,7 @@ class Set:
         sigma_m: float = None,
         verbose: bool = True,
         out_cell_ids: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        zuniq: bool = False,
     ) -> None:
         """Pre-compute sparse operators.
 
@@ -320,7 +320,10 @@ class Set:
         """
         self.level = int(level)
         self.nside = 2 ** int(level)
-        self.Npt = int(Npt)
+        self.zuniq = bool(zuniq)
+        if not self.zuniq:
+            self.Npt = int(Npt)
+            
         self.nest = bool(nest)
         self.radius = float(radius)
         self.ellipsoid = str(ellipsoid)
@@ -342,44 +345,63 @@ class Set:
         # --- move lon/lat to torch on target device (but healpix_geo needs CPU numpy internally)
         lon_t = lon_deg if isinstance(lon_deg, torch.Tensor) else torch.as_tensor(lon_deg)
         lat_t = lat_deg if isinstance(lat_deg, torch.Tensor) else torch.as_tensor(lat_deg)
-        lon_t = lon_t.to(self.device)
-        lat_t = lat_t.to(self.device)
-        
-        if self.out_cell_ids is not None:
-            self.xyz_samples = _lonlat_to_xyz(torch.deg2rad(lon_t),torch.deg2rad(lat_t))  # (N,3)
             
-
-        # --- get kept healpix cells + per-sample nearest indices + distances
-        cell_ids, hi, d = healpix_weighted_nearest(
-            lon_t,
-            lat_t,
-            level=self.level,
-            Npt=self.Npt,
-            nest=self.nest,
-            threshold=self.threshold,
-            radius=self.radius,
-            ellipsoid=self.ellipsoid,
-            sigma=self.sigma_m,
-            out_cell_ids=self.out_cell_ids,
-            ring_weight=ring_weight,
-            ring_search_init=ring_search_init,
-            ring_search_max=ring_search_max,
-            num_threads=num_threads,
-            device_for_dist=self.device,
-        )
+        if self.zuniq:    
+            import healpix_geo  # pip install healpix-geo
+            if self.nest:
+                cell_ids = healpix_geo.nested.lonlat_to_healpix(lon_t,lat_t, 
+                                                                self.level,
+                                                                ellipsoid=self.ellipsoid)
+            else:
+                cell_ids = healpix_geo.ring.lonlat_to_healpix(lon_t,lat_t, 
+                                                                self.level,
+                                                                ellipsoid=self.ellipsoid)
+                                                                
+            cell_ids,hi = torch.unique(torch.tensor(cell_ids,dtype=torch.long,device=self.device),
+                                        return_inverse=True)
+                                        
+            self.cell_ids = cell_ids
+            self.hi = hi
             
-
-        if cell_ids.numel() == 0:
-            raise RuntimeError(
-                "No HEALPix cell passed the threshold. "
-                "Lower 'threshold' or increase neighbourhood rings."
+        else:  
+            lon_t = lon_t.to(self.device)
+            lat_t = lat_t.to(self.device)
+            
+            if self.out_cell_ids is not None:
+                self.xyz_samples = _lonlat_to_xyz(torch.deg2rad(lon_t),torch.deg2rad(lat_t))  # (N,3)
+            
+            # --- get kept healpix cells + per-sample nearest indices + distances
+            cell_ids, hi, d = healpix_weighted_nearest(
+                lon_t,
+                lat_t,
+                level=self.level,
+                Npt=self.Npt,
+                nest=self.nest,
+                threshold=self.threshold,
+                radius=self.radius,
+                ellipsoid=self.ellipsoid,
+                sigma=self.sigma_m,
+                out_cell_ids=self.out_cell_ids,
+                ring_weight=ring_weight,
+                ring_search_init=ring_search_init,
+                ring_search_max=ring_search_max,
+                num_threads=num_threads,
+                device_for_dist=self.device,
             )
+            
 
-        # Store geometry outputs
-        self.cell_ids = cell_ids.to(torch.long).to(self.device)   # (K,)
-        self.hi = hi.to(torch.long).to(self.device)               # (N,Npt) indices into cell_ids
-        if Npt>1:
-            self.d_m = d.to(self.dtype).to(self.device)               # (N,Npt) meters
+            if cell_ids.numel() == 0:
+                raise RuntimeError(
+                    "No HEALPix cell passed the threshold. "
+                    "Lower 'threshold' or increase neighbourhood rings."
+                )
+
+            # Store geometry outputs
+            self.cell_ids = cell_ids.to(torch.long).to(self.device)   # (K,)
+            self.hi = hi.to(torch.long).to(self.device)               # (N,Npt) indices into cell_ids
+            if Npt>1:
+                self.d_m = d.to(self.dtype).to(self.device)               # (N,Npt) meters
+                
         self.N = int(lon_t.numel())
         self.K = int(self.cell_ids.numel())
         self.verbose = verbose
@@ -402,8 +424,9 @@ class Set:
             lat_c = torch.deg2rad(torch.as_tensor(lat_c_deg, device=self.device, dtype=self.xyz_samples.dtype))
             
             self.xyz_cells = _lonlat_to_xyz(lon_c, lat_c)  # (K,3)
-            
-        self.comp_matrix()
+        
+        if not self.zuniq:
+            self.comp_matrix()
         
     def comp_matrix(self):
         
