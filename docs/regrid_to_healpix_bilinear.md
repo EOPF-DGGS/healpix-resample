@@ -39,7 +39,7 @@ A practical, PyTorch-friendly design is:
 ### Suggested constructor
 
 ```python
-from regrid_to_healpix.bilinear import Set
+from regrid_to_healpix.bilinear import BilinearResampler
 
 op = Set(
     lon2d=lon2d,          # (Ny, Nx) grid longitudes (deg)

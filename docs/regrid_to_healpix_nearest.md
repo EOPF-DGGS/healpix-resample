@@ -34,7 +34,7 @@ Nearest-neighbour is equivalent to a **piecewise-constant** remapping on the HEA
 ## Constructor
 
 ```python
-from regrid_to_healpix.nearest import Set
+from regrid_to_healpix.nearest import NearestResampler
 
 op = Set(
     lon_deg=lon,
@@ -99,7 +99,7 @@ Return the kept HEALPix pixel ids as a NumPy array `(K,)`.
 
 ```python
 import torch
-from regrid_to_healpix.nearest import Set
+from regrid_to_healpix.nearest import NearestResampler
 
 op = Set(lon_deg=lon, lat_deg=lat, level=level, device="cuda", dtype=torch.float32)
 

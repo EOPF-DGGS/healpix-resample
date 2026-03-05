@@ -267,7 +267,7 @@ def healpix_weighted_nearest(
     return cell_ids_keep, idx_out, dist_out
 
 
-class Set:
+class KNeighborsResampler:
     """GPU-friendly sparse HEALPix regridding via local Gaussian weights + CG deconvolution.
 
     This class builds two sparse operators from unstructured lon/lat samples to a subset

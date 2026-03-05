@@ -31,7 +31,7 @@ The main goals of the package are:
 ## Design Principles
 
 -   Modular architecture:
-    -   `GEN` module: generic operator construction
+    -   `knn` module: generic operator construction
     -   `nearest`: nearest-neighbor specialization
     -   `psf`: weighted multi-point interpolation
 -   Sparse matrix representation for scalability
@@ -103,7 +103,7 @@ If no error occurs, the installation is successful.
 ## Typical Use Case
 
 ``` python
-from regrid_to_healpix.nearest import Set
+from regrid_to_healpix.nearest import NearestResampler
 
 op = Set(lon_deg=lon, lat_deg=lat, level=level, device="cuda")
 healpix_values = op.transform(values)
