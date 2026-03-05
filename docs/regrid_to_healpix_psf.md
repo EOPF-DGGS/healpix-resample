@@ -1,6 +1,6 @@
-# `regrid_to_healpix_psf` (PSF / multi-point HEALPix regridding)
+# `regrid_to_healpix.psf` (PSF / multi-point HEALPix regridding)
 
-`regrid_to_healpix_psf` provides **GPU-friendly sparse regridding** from unstructured geographic samples
+`regrid_to_healpix.psf` provides **GPU-friendly sparse regridding** from unstructured geographic samples
 (**longitude/latitude**) to a **subset of HEALPix pixels** at a target resolution (`nside = 2**level`).
 
 In contrast to a pure nearest-neighbor operator, this class builds a **local, multi-point Gaussian kernel**
@@ -150,7 +150,7 @@ Return the kept HEALPix pixel ids as a NumPy array `(K,)`.
 
 ```python
 import torch
-from regrid_to_healpix.regrid_to_healpix_psf import regrid_to_healpix_psf
+from regrid_to_healpix.psf import regrid_to_healpix_psf
 
 op = regrid_to_healpix_psf(
     lon_deg=lon, lat_deg=lat,

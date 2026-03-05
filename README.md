@@ -103,7 +103,7 @@ If no error occurs, the installation is successful.
 ## Typical Use Case
 
 ``` python
-from regrid_to_healpix.regrid_to_healpix_nearest import Set
+from regrid_to_healpix.nearest import Set
 
 op = Set(lon_deg=lon, lat_deg=lat, level=level, device="cuda")
 healpix_values = op.transform(values)

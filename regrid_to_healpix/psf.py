@@ -12,7 +12,7 @@ Core ideas:
 This module is designed for large N and batched values (B,N) on CUDA.
 """
 
-from .regrid_to_healpix_GEN import Set as GENSet
+from regrid_to_healpix.knn import Set as GENSet
 import math
 import numpy as np
 import torch
@@ -118,7 +118,7 @@ def least_squares_cg(M,
     x, info = conjugate_gradient(A_mv=A_mv, b=b, x0=x0, max_iter=max_iter, tol=tol,verbose=verbose)
     return x, info
 
-from .regrid_to_healpix_GEN import _sigma_level_m, _lonlat_to_xyz
+from regrid_to_healpix.knn import _sigma_level_m, _lonlat_to_xyz
 
 class Set(GENSet):
     def __init__(

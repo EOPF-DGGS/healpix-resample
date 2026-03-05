@@ -9,7 +9,7 @@ Core ideas:
 
 This module is designed for large N and batched values (B,N) on CUDA.
 """
-from .regrid_to_healpix_GEN import Set as GENSet
+from regrid_to_healpix.knn import Set as GENSet
 import math
 import numpy as np
 import torch
