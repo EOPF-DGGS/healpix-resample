@@ -29,4 +29,7 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
+include = [
+    "regrid_to_healpix",
+    "regrid_to_healpix.*",
+]
