@@ -360,7 +360,7 @@ class PSFResampler(KNeighborsResampler):
         del MT_coo
 
     @torch.no_grad()
-    def transform(
+    def resample(
         self,
         val: torch.Tensor | np.ndarray,
         *,

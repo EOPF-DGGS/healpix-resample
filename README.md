@@ -106,7 +106,7 @@ If no error occurs, the installation is successful.
 from regrid_to_healpix.nearest import NearestResampler
 
 op = Set(lon_deg=lon, lat_deg=lat, level=level, device="cuda")
-healpix_values = op.transform(values)
+healpix_values = op.resample(values)
 ```
 
 ## Target Applications

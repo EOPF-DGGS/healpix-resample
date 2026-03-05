@@ -74,7 +74,7 @@ After initialization, you typically have:
 
 ## Methods
 
-### `transform(hval)`
+### `resample(hval)`
 
 Project a HEALPix field (on the kept pixels) back to sample locations.
 
@@ -107,7 +107,7 @@ op = Set(lon_deg=lon, lat_deg=lat, level=level, device="cuda", dtype=torch.float
 hval = op.fit(val)   # or op.apply(val)
 
 # Reconstruct back to the original sample locations
-val_hat = op.transform(hval)
+val_hat = op.resample(hval)
 
 cell_ids = op.get_cell_ids()
 ```

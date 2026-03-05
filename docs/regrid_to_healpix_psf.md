@@ -30,10 +30,10 @@ The class:
    - **`MT`** of shape `(K, N)` : maps sample values back to the HEALPix subset (adjoint-like accumulation)
 
 4. Provides:
-   - **`transform(hval)`**: project a HEALPix field back to sample locations
+   - **`resample(hval)`**: project a HEALPix field back to sample locations
    - **`fit(val)`**: estimate the HEALPix field (`hval`) from samples by solving a **damped least-squares** problem with
      **Conjugate Gradient (CG)**
-   - **`fit_transform(val)`**: fit then reconstruct values at the sample points
+   - **`fit_resample(val)`**: fit then reconstruct values at the sample points
 
 > Note on geodesy: distances are computed in meters and the class supports the **Earth ellipsoid WGS84** and the
 > **HEALPix authalic definition** through its geometry helper.
@@ -125,14 +125,14 @@ Estimate a HEALPix field from samples.
   - `hval`: `(K,)` or `(B, K)`
   - optionally CG diagnostics if `return_info=True`
 
-### `transform(hval)`
+### `resample(hval)`
 
 Project HEALPix field(s) back to sample locations.
 
 - **Input**: `hval` `(K,)` or `(B, K)`
 - **Output**: reconstructed samples `(N,)` or `(B, N)`
 
-### `fit_transform(val, ...)`
+### `fit_resample(val, ...)`
 
 Convenience method:
 1) fit `hval`, 2) return reconstructed sample values.
@@ -162,7 +162,7 @@ op = regrid_to_healpix_psf(
 hval = op.fit(val, lam=1e-3, max_iter=200, tol=1e-7)
 
 # Reconstruct values at the original sample points
-val_hat = op.transform(hval)
+val_hat = op.resample(hval)
 
 # Access the HEALPix pixel ids corresponding to hval
 cell_ids = op.get_cell_ids()

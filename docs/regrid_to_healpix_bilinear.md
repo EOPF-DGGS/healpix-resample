@@ -34,7 +34,7 @@ A practical, PyTorch-friendly design is:
 
 - `Set(...)` builds the sparse weights (4 contributions per target).
 - `fit(val)` maps lon/lat grid values → HEALPix subset.
-- `transform(hval)` maps HEALPix subset → target/sample locations (optional, depending on your needs).
+- `resample(hval)` maps HEALPix subset → target/sample locations (optional, depending on your needs).
 
 ### Suggested constructor
 

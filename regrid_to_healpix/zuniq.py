@@ -41,7 +41,7 @@ class ZuniqNearestResampler(KNeighborsResampler):
         return res if is_torch else res.cpu().numpy()
         
     @torch.no_grad()
-    def transform(
+    def resample(
         self,
         val: torch.Tensor | np.ndarray,
     ):
