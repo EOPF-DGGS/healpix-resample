@@ -1,21 +1,21 @@
 """
-regrid_to_healpix_bilinear.py
+bilinear.py
 
 GPU-friendly sparse HEALPix regridding from unstructured lon/lat samples
 to a subset of HEALPix pixels at a target resolution (nside = 2**level).
 
 Core ideas:
-- Use regrid_to_heapix with npt=1.
+- Use npt=4.
 
 This module is designed for large N and batched values (B,N) on CUDA.
 """
-from .regrid_to_healpix_GEN import Set as GENSet
+from healpix_resample.knn import KNeighborsResampler
 import math
 import numpy as np
 import torch
 
 
-class Set(GENSet):
+class BilinearResampler(KNeighborsResampler):
     def __init__(self, *args, **kwargs):
         super().__init__(Npt=4, *args, **kwargs)
         

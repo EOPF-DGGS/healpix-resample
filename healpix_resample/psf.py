@@ -1,5 +1,5 @@
 """
-regrid_to_healpix_psf.py
+psf.py
 
 GPU-friendly sparse HEALPix regridding from unstructured lon/lat samples
 to a subset of HEALPix pixels at a target resolution (nside = 2**level).
@@ -12,12 +12,15 @@ Core ideas:
 This module is designed for large N and batched values (B,N) on CUDA.
 """
 
-from .regrid_to_healpix_GEN import Set as GENSet
+from typing import Callable, Generic, Optional, Tuple, Dict
+
 import math
 import numpy as np
 import torch
-from typing import Tuple, Optional
-from typing import Callable, Optional, Tuple, Dict
+
+from healpix_resample.base import ResampleResults, T_Array
+from healpix_resample.knn import KNeighborsResampler, _sigma_level_m, _lonlat_to_xyz
+
 
 @torch.no_grad()
 def conjugate_gradient(
@@ -78,11 +81,12 @@ def conjugate_gradient(
 
     info = {
         "residual_norms": torch.stack(residual_norms),
-        "iters": torch.tensor(len(residual_norms) - 1, device=b.device),
+        "niters": torch.tensor(len(residual_norms) - 1, device=b.device),
     }
     if verbose:
         print('Final Itt %d : %.4g'%(k,rs_old))
     return x, info
+
 
 @torch.no_grad()
 def least_squares_cg(M,
@@ -118,9 +122,8 @@ def least_squares_cg(M,
     x, info = conjugate_gradient(A_mv=A_mv, b=b, x0=x0, max_iter=max_iter, tol=tol,verbose=verbose)
     return x, info
 
-from .regrid_to_healpix_GEN import _sigma_level_m, _lonlat_to_xyz
 
-class Set(GENSet):
+class PSFResampler(KNeighborsResampler, Generic[T_Array]):
     def __init__(
         self,
         lon_deg,
@@ -360,16 +363,16 @@ class Set(GENSet):
         del MT_coo
 
     @torch.no_grad()
-    def transform(
+    def resample(
         self,
-        val: torch.Tensor | np.ndarray,
+        val: T_Array,
         *,
         lam: float = 0.0,
         max_iter: int = 100,
         tol: float = 1e-8,
         x0: Optional[torch.Tensor] = None,
         return_info: bool = False,
-    ):
+    ) -> ResampleResults[T_Array]:
         """Estimate the HEALPix field from unstructured samples.
 
         Args:
@@ -410,13 +413,24 @@ class Set(GENSet):
             verbose=self.verbose,
         )
         
-        hval = delta + x_ref
-        
+        hval = delta + x_ref 
         if val is not None and val.ndim == 1:
             hval = hval[0]
+
+        cell_ids = self.cell_ids
+        cg_residual_norms = info["residual_norms"]
+        cg_niters = info["niters"]
+
         if not isinstance(val, torch.Tensor):
-            hval=hval.cpu().numpy()
-        if return_info:
-            return hval, info
-        return hval
+            hval= hval.cpu().numpy()
+            cell_ids = cell_ids.cpu().numpy()
+            cg_residual_norms = cg_residual_norms.cpu().numpy()
+            cg_niters = cg_niters.cpu().numpy()
+
+        return ResampleResults(
+            cell_data=hval,
+            cell_ids=cell_ids,
+            cg_residual_norms=cg_residual_norms,
+            cg_niters=cg_niters
+        )
   

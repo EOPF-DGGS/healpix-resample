@@ -1,6 +1,6 @@
-# `regrid_to_healpix_psf` (PSF / multi-point HEALPix regridding)
+# `healpix_resample.psf` (PSF / multi-point HEALPix regridding)
 
-`regrid_to_healpix_psf` provides **GPU-friendly sparse regridding** from unstructured geographic samples
+`healpix_resample.psf` provides **GPU-friendly sparse regridding** from unstructured geographic samples
 (**longitude/latitude**) to a **subset of HEALPix pixels** at a target resolution (`nside = 2**level`).
 
 In contrast to a pure nearest-neighbor operator, this class builds a **local, multi-point Gaussian kernel**
@@ -30,10 +30,10 @@ The class:
    - **`MT`** of shape `(K, N)` : maps sample values back to the HEALPix subset (adjoint-like accumulation)
 
 4. Provides:
-   - **`transform(hval)`**: project a HEALPix field back to sample locations
+   - **`resample(hval)`**: project a HEALPix field back to sample locations
    - **`fit(val)`**: estimate the HEALPix field (`hval`) from samples by solving a **damped least-squares** problem with
      **Conjugate Gradient (CG)**
-   - **`fit_transform(val)`**: fit then reconstruct values at the sample points
+   - **`fit_resample(val)`**: fit then reconstruct values at the sample points
 
 > Note on geodesy: distances are computed in meters and the class supports the **Earth ellipsoid WGS84** and the
 > **HEALPix authalic definition** through its geometry helper.
@@ -64,7 +64,7 @@ Finally:
 ## Constructor
 
 ```python
-regrid_to_healpix_psf(
+healpix_resample_psf(
     lon_deg, lat_deg,
     Npt, level,
     sigma_m=None,
@@ -125,14 +125,14 @@ Estimate a HEALPix field from samples.
   - `hval`: `(K,)` or `(B, K)`
   - optionally CG diagnostics if `return_info=True`
 
-### `transform(hval)`
+### `resample(hval)`
 
 Project HEALPix field(s) back to sample locations.
 
 - **Input**: `hval` `(K,)` or `(B, K)`
 - **Output**: reconstructed samples `(N,)` or `(B, N)`
 
-### `fit_transform(val, ...)`
+### `fit_resample(val, ...)`
 
 Convenience method:
 1) fit `hval`, 2) return reconstructed sample values.
@@ -150,9 +150,9 @@ Return the kept HEALPix pixel ids as a NumPy array `(K,)`.
 
 ```python
 import torch
-from regrid_to_healpix.regrid_to_healpix_psf import regrid_to_healpix_psf
+from healpix_resample.psf import PSFResampler
 
-op = regrid_to_healpix_psf(
+op = PSFResampler(
     lon_deg=lon, lat_deg=lat,
     level=level, Npt=9,
     device="cuda", dtype=torch.float32,
@@ -162,7 +162,7 @@ op = regrid_to_healpix_psf(
 hval = op.fit(val, lam=1e-3, max_iter=200, tol=1e-7)
 
 # Reconstruct values at the original sample points
-val_hat = op.transform(hval)
+val_hat = op.resample(hval)
 
 # Access the HEALPix pixel ids corresponding to hval
 cell_ids = op.get_cell_ids()

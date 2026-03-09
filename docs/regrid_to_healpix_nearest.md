@@ -1,6 +1,6 @@
-# `regrid_to_healpix_nearest` (nearest-neighbour HEALPix regridding)
+# `healpix_resample.nearest` (nearest-neighbour HEALPix regridding)
 
-`regrid_to_healpix_nearest` provides the **simplest and fastest** mapping from unstructured geographic samples
+`healpix_resample.nearest` provides the **simplest and fastest** mapping from unstructured geographic samples
 (**longitude/latitude**) to a **subset of HEALPix pixels** at a target resolution (`nside = 2**level`).
 
 It constructs a sparse operator where each input sample contributes **only to its closest HEALPix cell**
@@ -34,7 +34,7 @@ Nearest-neighbour is equivalent to a **piecewise-constant** remapping on the HEA
 ## Constructor
 
 ```python
-from regrid_to_healpix.regrid_to_healpix_nearest import Set
+from healpix_resample.nearest import NearestResampler
 
 op = Set(
     lon_deg=lon,
@@ -74,7 +74,7 @@ After initialization, you typically have:
 
 ## Methods
 
-### `transform(hval)`
+### `resample(hval)`
 
 Project a HEALPix field (on the kept pixels) back to sample locations.
 
@@ -99,7 +99,7 @@ Return the kept HEALPix pixel ids as a NumPy array `(K,)`.
 
 ```python
 import torch
-from regrid_to_healpix.regrid_to_healpix_nearest import Set
+from healpix_resample.nearest import NearestResampler
 
 op = Set(lon_deg=lon, lat_deg=lat, level=level, device="cuda", dtype=torch.float32)
 
@@ -107,7 +107,7 @@ op = Set(lon_deg=lon, lat_deg=lat, level=level, device="cuda", dtype=torch.float
 hval = op.fit(val)   # or op.apply(val)
 
 # Reconstruct back to the original sample locations
-val_hat = op.transform(hval)
+val_hat = op.resample(hval)
 
 cell_ids = op.get_cell_ids()
 ```

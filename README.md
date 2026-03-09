@@ -31,7 +31,7 @@ The main goals of the package are:
 ## Design Principles
 
 -   Modular architecture:
-    -   `GEN` module: generic operator construction
+    -   `knn` module: generic operator construction
     -   `nearest`: nearest-neighbor specialization
     -   `psf`: weighted multi-point interpolation
 -   Sparse matrix representation for scalability
@@ -94,8 +94,8 @@ Make sure you are using:
 After installation:
 
 ```python
-import healpix-resample
-print(healpix-resample.__file__)
+import healpix_resample
+print(healpix_resample.__file__)
 ```
 
 If no error occurs, the installation is successful.
@@ -103,10 +103,10 @@ If no error occurs, the installation is successful.
 ## Typical Use Case
 
 ``` python
-from healpix-resample.healpix-resample_nearest import Set
+from healpix_resample.nearest import NearestResampler
 
-op = Set(lon_deg=lon, lat_deg=lat, level=level, device="cuda")
-healpix_values = op.transform(values)
+op = NearestResampler(lon_deg=lon, lat_deg=lat, level=level, device="cuda")
+healpix_values = op.resample(values)
 ```
 
 ## Target Applications
