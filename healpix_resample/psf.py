@@ -12,12 +12,15 @@ Core ideas:
 This module is designed for large N and batched values (B,N) on CUDA.
 """
 
-from healpix_resample.knn import KNeighborsResampler
+from typing import Callable, Optional, Tuple, Dict
+
 import math
 import numpy as np
 import torch
-from typing import Tuple, Optional
-from typing import Callable, Optional, Tuple, Dict
+
+from healpix_resample.base import T_Array
+from healpix_resample.knn import KNeighborsResampler
+
 
 @torch.no_grad()
 def conjugate_gradient(
@@ -362,7 +365,7 @@ class PSFResampler(KNeighborsResampler):
     @torch.no_grad()
     def resample(
         self,
-        val: torch.Tensor | np.ndarray,
+        val: T_Array,
         *,
         lam: float = 0.0,
         max_iter: int = 100,

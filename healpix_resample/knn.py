@@ -13,9 +13,14 @@ This module is designed for large N and batched values (B,N) on CUDA.
 """
 
 import math
+from typing import Generic, Tuple, Optional, Union
+
+import healpix_geo
 import numpy as np
 import torch
-from typing import Tuple, Optional, Union
+
+from healpix_resample.base import T_Array
+
 
 def _lonlat_to_xyz(lon_rad: torch.Tensor, lat_rad: torch.Tensor) -> torch.Tensor:
     clat = torch.cos(lat_rad)
@@ -38,7 +43,7 @@ def healpix_weighted_nearest(
     threshold: float = 0.1,
     radius: float = 6371000.0,
     ellipsoid: str = "WGS84",
-    sigma: float = None,
+    sigma: float | None = None,
     # sous-ensemble de pixels de sortie autorisés (en ids healpix au même "level")
     out_cell_ids: Optional[Union[np.ndarray, torch.Tensor]] = None,
     # voisinage utilisé pour estimer les poids (construction cell_ids)
@@ -64,7 +69,6 @@ def healpix_weighted_nearest(
     N = int(longitude1.numel())
     assert Npt >= 1
     
-    import healpix_geo  # pip install healpix-geo
     
     # --- choix rings par défaut
     # ring minimal pour avoir >= Npt candidats dans un carré (2r+1)^2, + marge
@@ -267,7 +271,7 @@ def healpix_weighted_nearest(
     return cell_ids_keep, idx_out, dist_out
 
 
-class KNeighborsResampler:
+class KNeighborsResampler(Generic[T_Array]):
     """GPU-friendly sparse HEALPix regridding via local Gaussian weights + CG deconvolution.
 
     This class builds two sparse operators from unstructured lon/lat samples to a subset
@@ -286,8 +290,8 @@ class KNeighborsResampler:
 
     def __init__(
         self,
-        lon_deg: np.ndarray | torch.Tensor,
-        lat_deg: np.ndarray | torch.Tensor,
+        lon_deg: T_Array,
+        lat_deg: T_Array,
         Npt: int,
         level: int,
         *,
@@ -295,15 +299,15 @@ class KNeighborsResampler:
         radius: float = 6371000.0,
         ellipsoid: str = "WGS84",
         dtype: torch.dtype = torch.float64,
-        device: torch.device | str = None,
+        device: torch.device | str | None = None,
         ring_weight: Optional[int] = None,
         ring_search_init: Optional[int] = None,
         ring_search_max: int = 2,
         num_threads: int = 0,
         threshold: float = 0.1,
-        sigma_m: float = None,
+        sigma_m: float | None = None,
         verbose: bool = True,
-        out_cell_ids: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        out_cell_ids: T_Array | None = None,
         zuniq: bool = False,
     ) -> None:
         """Pre-compute sparse operators.
@@ -347,7 +351,6 @@ class KNeighborsResampler:
         lat_t = lat_deg if isinstance(lat_deg, torch.Tensor) else torch.as_tensor(lat_deg)
             
         if self.zuniq:    
-            import healpix_geo  # pip install healpix-geo
             if self.nest:
                 cell_ids = healpix_geo.nested.lonlat_to_healpix(lon_t,lat_t, 
                                                                 self.level,
@@ -409,8 +412,6 @@ class KNeighborsResampler:
         if self.out_cell_ids is not None:
             
             # --- geometry buffers for optional fallbacks (e.g. when out_cell_ids forces empty columns)
-
-            import healpix_geo  # pip install healpix-geo
 
             # unit vectors for output HEALPix cell centers (K,3)
             cell_np = self.cell_ids.detach().cpu().numpy().astype(np.uint64)
@@ -484,7 +485,7 @@ class KNeighborsResampler:
         self.MT = MT_coo.to_sparse_csr()
 
     @torch.no_grad()
-    def invert(self, hval: torch.Tensor | np.ndarray,) -> torch.Tensor:
+    def invert(self, hval: T_Array) -> T_Array:
         """Project HEALPix field back to the sample locations.
 
         Args:
@@ -507,7 +508,7 @@ class KNeighborsResampler:
     @torch.no_grad()
     def resample(
         self,
-        val: torch.Tensor | np.ndarray,
+        val: T_Array,
         *,
         lam: float = 0.0,
         max_iter: int = 100,
