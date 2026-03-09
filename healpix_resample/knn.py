@@ -308,7 +308,7 @@ class KNeighborsResampler(Generic[T_Array]):
         sigma_m: float | None = None,
         verbose: bool = True,
         out_cell_ids: T_Array | None = None,
-        zuniq: bool = False,
+        group_by: bool = False,
     ) -> None:
         """Pre-compute sparse operators.
 
@@ -324,8 +324,8 @@ class KNeighborsResampler(Generic[T_Array]):
         """
         self.level = int(level)
         self.nside = 2 ** int(level)
-        self.zuniq = bool(zuniq)
-        if not self.zuniq:
+        self.group_by = bool(group_by)
+        if not self.group_by:
             self.Npt = int(Npt)
             
         self.nest = bool(nest)
@@ -350,7 +350,7 @@ class KNeighborsResampler(Generic[T_Array]):
         lon_t = lon_deg if isinstance(lon_deg, torch.Tensor) else torch.as_tensor(lon_deg)
         lat_t = lat_deg if isinstance(lat_deg, torch.Tensor) else torch.as_tensor(lat_deg)
             
-        if self.zuniq:    
+        if self.group_by:    
             if self.nest:
                 cell_ids = healpix_geo.nested.lonlat_to_healpix(lon_t,lat_t, 
                                                                 self.level,
@@ -426,7 +426,7 @@ class KNeighborsResampler(Generic[T_Array]):
             
             self.xyz_cells = _lonlat_to_xyz(lon_c, lat_c)  # (K,3)
         
-        if not self.zuniq:
+        if not self.group_by:
             self.comp_matrix()
         
     def comp_matrix(self):
