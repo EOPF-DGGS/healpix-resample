@@ -1,6 +1,6 @@
-# `regrid_to_healpix.bilinear` (bilinear lon/lat interpolation to HEALPix)
+# `healpix_resample.bilinear` (bilinear lon/lat interpolation to HEALPix)
 
-`regrid_to_healpix.bilinear` is intended to provide a **bilinear interpolation** operator from gridded or locally
+`healpix_resample.bilinear` is intended to provide a **bilinear interpolation** operator from gridded or locally
 grid-like longitude/latitude data onto a HEALPix grid.
 
 Conceptually, bilinear interpolation uses the **four surrounding grid points** around each target location and
@@ -39,7 +39,7 @@ A practical, PyTorch-friendly design is:
 ### Suggested constructor
 
 ```python
-from regrid_to_healpix.bilinear import BilinearResampler
+from healpix_resample.bilinear import BilinearResampler
 
 op = Set(
     lon2d=lon2d,          # (Ny, Nx) grid longitudes (deg)
@@ -84,6 +84,6 @@ This makes bilinear interpolation:
 
 ## Status
 
-If `regrid_to_healpix.bilinear` is not yet implemented in the repository, this document describes the intended
+If `healpix_resample.bilinear` is not yet implemented in the repository, this document describes the intended
 behavior and a recommended public API. Once the class exists, you can update this file to match the actual
 parameters and method names.

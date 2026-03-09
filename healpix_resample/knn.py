@@ -1,5 +1,5 @@
 """
-regrid_to_healpix_GEN.py
+knn.py
 
 GPU-friendly sparse HEALPix regridding from unstructured lon/lat samples
 to a subset of HEALPix pixels at a target resolution (nside = 2**level).

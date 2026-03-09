@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "regrid_to_healpix"
+name = "healpix-resample"
 version = "0.1.0"
 description = "Sparse GPU-enabled regridding from lon/lat to HEALPix"
 readme = "README.md"
@@ -30,6 +30,6 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = [
-    "regrid_to_healpix",
-    "regrid_to_healpix.*",
+    "healpix_resample",
+    "healpix_resample.*",
 ]

@@ -1,5 +1,5 @@
 """
-regrid_to_healpix_zuniq.py
+zuniq.py
 
 GPU-friendly sparse HEALPix regridding from unstructured lon/lat samples
 to a subset of HEALPix pixels at a target resolution (nside = 2**level).
@@ -9,7 +9,7 @@ Core ideas:
 
 This module is designed for large N and batched values (B,N) on CUDA.
 """
-from regrid_to_healpix.knn import KNeighborsResampler
+from healpix_resample.knn import KNeighborsResampler
 import math
 import numpy as np
 import torch

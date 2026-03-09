@@ -1,5 +1,5 @@
 """
-regrid_to_healpix_psf.py
+psf.py
 
 GPU-friendly sparse HEALPix regridding from unstructured lon/lat samples
 to a subset of HEALPix pixels at a target resolution (nside = 2**level).
@@ -12,7 +12,7 @@ Core ideas:
 This module is designed for large N and batched values (B,N) on CUDA.
 """
 
-from regrid_to_healpix.knn import KNeighborsResampler
+from healpix_resample.knn import KNeighborsResampler
 import math
 import numpy as np
 import torch
@@ -118,7 +118,7 @@ def least_squares_cg(M,
     x, info = conjugate_gradient(A_mv=A_mv, b=b, x0=x0, max_iter=max_iter, tol=tol,verbose=verbose)
     return x, info
 
-from regrid_to_healpix.knn import _sigma_level_m, _lonlat_to_xyz
+from healpix_resample.knn import _sigma_level_m, _lonlat_to_xyz
 
 class PSFResampler(KNeighborsResampler):
     def __init__(

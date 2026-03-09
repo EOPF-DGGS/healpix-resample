@@ -1,6 +1,6 @@
-# `regrid_to_healpix.psf` (PSF / multi-point HEALPix regridding)
+# `healpix_resample.psf` (PSF / multi-point HEALPix regridding)
 
-`regrid_to_healpix.psf` provides **GPU-friendly sparse regridding** from unstructured geographic samples
+`healpix_resample.psf` provides **GPU-friendly sparse regridding** from unstructured geographic samples
 (**longitude/latitude**) to a **subset of HEALPix pixels** at a target resolution (`nside = 2**level`).
 
 In contrast to a pure nearest-neighbor operator, this class builds a **local, multi-point Gaussian kernel**
@@ -64,7 +64,7 @@ Finally:
 ## Constructor
 
 ```python
-regrid_to_healpix_psf(
+healpix_resample_psf(
     lon_deg, lat_deg,
     Npt, level,
     sigma_m=None,
@@ -150,9 +150,9 @@ Return the kept HEALPix pixel ids as a NumPy array `(K,)`.
 
 ```python
 import torch
-from regrid_to_healpix.psf import regrid_to_healpix_psf
+from healpix_resample.psf import PSFResampler
 
-op = regrid_to_healpix_psf(
+op = PSFResampler(
     lon_deg=lon, lat_deg=lat,
     level=level, Npt=9,
     device="cuda", dtype=torch.float32,
