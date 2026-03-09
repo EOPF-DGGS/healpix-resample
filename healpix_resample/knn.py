@@ -19,7 +19,7 @@ import healpix_geo
 import numpy as np
 import torch
 
-from healpix_resample.base import T_Array
+from healpix_resample.base import ResampleResults, T_Array
 
 
 def _lonlat_to_xyz(lon_rad: torch.Tensor, lat_rad: torch.Tensor) -> torch.Tensor:
@@ -515,7 +515,7 @@ class KNeighborsResampler(Generic[T_Array]):
         tol: float = 1e-8,
         x0: Optional[torch.Tensor] = None,
         return_info: bool = False,
-    ):
+    ) -> ResampleResults[T_Array]:
         """Estimate the HEALPix field from unstructured samples.
 
         Args:
@@ -537,13 +537,16 @@ class KNeighborsResampler(Generic[T_Array]):
             y = y[None, :]
 
         # reference field (B,K)
-        res = y @ self.M
+        hval = y @ self.M
+        cell_ids = self.cell_ids
         
         if not isinstance(val, torch.Tensor):
-            res=res.cpu().numpy()
+            hval= hval.cpu().numpy()
+            cell_ids = cell_ids.cpu().numpy()
         if clean_shape:
-            return res[0]
-        return res
+            hval = hval[0]
+        
+        return ResampleResults(cell_data=hval, cell_ids=cell_ids)
         
     def get_cell_ids(self):
         return self.cell_ids.cpu().numpy()

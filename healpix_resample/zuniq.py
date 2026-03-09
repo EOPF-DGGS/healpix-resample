@@ -15,7 +15,7 @@ import math
 import numpy as np
 import torch
 
-from healpix_resample.base import T_Array
+from healpix_resample.base import T_Array, ResampleResults
 from healpix_resample.knn import KNeighborsResampler
 
 
@@ -45,7 +45,7 @@ class ZuniqNearestResampler(KNeighborsResampler, Generic[T_Array]):
         return res
         
     @torch.no_grad()
-    def resample(self, val: T_Array):
+    def resample(self, val: T_Array) -> ResampleResults[T_Array]:
         """Estimate the HEALPix field from unstructured samples.
 
         Args:
@@ -68,9 +68,9 @@ class ZuniqNearestResampler(KNeighborsResampler, Generic[T_Array]):
 
         # reference field (B,K)
         B=y.shape[0]
-        res = torch.zeros(B, self.K, device=y.device,dtype= self.dtype)
+        hval = torch.zeros(B, self.K, device=y.device,dtype= self.dtype)
 
-        res.scatter_reduce_(
+        hval.scatter_reduce_(
             1,
             self.hi.unsqueeze(0).expand(B, -1),
             y,
@@ -78,8 +78,12 @@ class ZuniqNearestResampler(KNeighborsResampler, Generic[T_Array]):
             include_self=False
         )
         
+        cell_ids = self.cell_ids
+        
         if not isinstance(val, torch.Tensor):
-            res=res.cpu().numpy()
+            hval= hval.cpu().numpy()
+            cell_ids = cell_ids.cpu().numpy()
         if clean_shape:
-            return res[0]
-        return res
+            hval = hval[0]
+        
+        return ResampleResults(cell_data=hval, cell_ids=cell_ids)
