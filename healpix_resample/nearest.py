@@ -5,7 +5,7 @@ GPU-friendly sparse HEALPix regridding from unstructured lon/lat samples
 to a subset of HEALPix pixels at a target resolution (nside = 2**level).
 
 Core ideas:
-- Use regrid_to_heapix with npt=1.
+- Use npt=1.
 
 This module is designed for large N and batched values (B,N) on CUDA.
 """
