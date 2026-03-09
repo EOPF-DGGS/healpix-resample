@@ -1,6 +1,6 @@
-# regrid_to_healpix
+# healpix-resample
 
-`regrid_to_healpix` is a lightweight Python package designed to regrid
+`healpix-resample` is a lightweight Python package designed to regrid
 data defined on longitude--latitude coordinates onto a HEALPix
 grid.
 
@@ -47,15 +47,15 @@ This package is distributed as a **private repository** and must be installed fr
 ### Clone the repository
 
 ```bash
-git clone https://github.com/EOPF-DGGS/regrid_to_healpix.git
-cd regrid_to_healpix
+git clone https://github.com/EOPF-DGGS/healpix-resample.git
+cd healpix-resample
 ```
 
 If you use SSH access:
 
 ```bash
-git clone git@github.com:EOPF-DGGS/regrid_to_healpix.git
-cd regrid_to_healpix
+git clone git@github.com:EOPF-DGGS/healpix-resample.git
+cd healpix-resample
 ```
 
 ---
@@ -94,8 +94,8 @@ Make sure you are using:
 After installation:
 
 ```python
-import regrid_to_healpix
-print(regrid_to_healpix.__file__)
+import healpix_resample
+print(healpix_resample.__file__)
 ```
 
 If no error occurs, the installation is successful.
@@ -103,9 +103,9 @@ If no error occurs, the installation is successful.
 ## Typical Use Case
 
 ``` python
-from regrid_to_healpix.nearest import NearestResampler
+from healpix_resample.nearest import NearestResampler
 
-op = Set(lon_deg=lon, lat_deg=lat, level=level, device="cuda")
+op = NearestResampler(lon_deg=lon, lat_deg=lat, level=level, device="cuda")
 healpix_values = op.resample(values)
 ```
 
