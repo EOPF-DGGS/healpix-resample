@@ -98,7 +98,7 @@ class GroupByResampler(KNeighborsResampler, Generic[T_Array]):
         return ResampleResults(cell_data=hval, cell_ids=cell_ids)
 
 
-class CellPointResampler(GroupByResampler, Generic[T_Array]):
+class CellPointResampler(GroupByResampler):
     """Resample input lat-lon points as HEALPix "cell-points".
 
     The values of the input lat-lon points are resampled on HEALPix cells
@@ -111,5 +111,5 @@ class CellPointResampler(GroupByResampler, Generic[T_Array]):
     are merged according to the `reduce` option.
 
     """
-    def __init__(self, reduce="mean", *args, **kwargs):
-        super().__init__(level=29, reduce=reduce, *args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(level=29, *args, **kwargs)
