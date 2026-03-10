@@ -96,3 +96,20 @@ class GroupByResampler(KNeighborsResampler, Generic[T_Array]):
             hval = hval[0]
         
         return ResampleResults(cell_data=hval, cell_ids=cell_ids)
+
+
+class CellPointResampler(GroupByResampler):
+    """Resample input lat-lon points as HEALPix "cell-points".
+
+    The values of the input lat-lon points are resampled on HEALPix cells
+    with a fixed, maximum refinement level (=29) in which the points are located.
+
+    Level-29 cells have a tiny resolution of 0.4 milliarcseconds. In many
+    applications those cells can be approximated as "points".
+
+    If multiple input points are located within the same cell, their values
+    are merged according to the `reduce` option.
+
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(level=29, *args, **kwargs)
