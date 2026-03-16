@@ -6,13 +6,13 @@
 :::{grid-item-card} Quickstart
 :link: quickstart
 :link-type: doc
-blabalbla
+Learn to resample scattered point data onto a HEALPix grid in four steps.
 :::
 
 :::{grid-item-card} 4 resamplers
 :link: 4resamplers
 :link-type: doc
-blablabla
+Learn how four resampling methods compare in behaviour, accuracy, and speed on the same dataset.
 :::
 ::::
 
