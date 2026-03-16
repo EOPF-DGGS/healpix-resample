@@ -90,10 +90,17 @@ html_theme_options = {
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3/", None),
     "sphinx": ("https://www.sphinx-doc.org/en/stable/", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
+    "torch": ("https://pytorch.org/docs/stable/", None),
 }
 
 autosummary_generate = True
 autodoc_typehints = "none"
+
+# Suppress warnings for inherited methods in autosummary-generated pages
+nitpick_ignore_regex = [
+    (r"py:obj", r"healpix_resample\.\w+\.(comp_matrix|get_cell_ids|invert|resample)"),
+]
 
 napoleon_numpy_docstring = True
 napoleon_use_param = False

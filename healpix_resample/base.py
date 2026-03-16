@@ -16,13 +16,13 @@ class ResampleResults(Generic[T_Array]):
 
     Attributes
     ----------
-    cell_data : np.array or torch.Tensor
+    cell_data : numpy.ndarray or torch.Tensor
         Data values resampled on HEALPix cells
-    cell_ids : np.array or torch.Tensor
+    cell_ids : numpy.ndarray or torch.Tensor
         HEALPix cell ids.
-    cg_residual_norms : np.array or torch.Tensor or None
+    cg_residual_norms : numpy.ndarray or torch.Tensor or None
         Conjugate gradient residual norms (if any).
-    cg_niters : np.array or torch.Tensor or None
+    cg_niters : numpy.ndarray or torch.Tensor or None
         Conjugate gradient number of iterations (if any).
     
     """

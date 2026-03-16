@@ -73,6 +73,6 @@ print("Batch output shape:", result_batch.cell_data.shape)  # (10, K)
 
 ## Next steps
 
-- Explore the {doc}`4_resamplers` notebook to compare all available methods.
+- Explore the {doc}`4resamplers` notebook to compare all available methods.
 - Read the {doc}`../user-guide/index` for a detailed explanation of parameters.
 
