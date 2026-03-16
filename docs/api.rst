@@ -10,13 +10,14 @@ Resamplers
    healpix_resample.NearestResampler
    healpix_resample.BilinearResampler
    healpix_resample.PSFResampler
-   healpix_resample.ZuniqNearestResampler
+   healpix_resample.CellPointResampler
+   healpix_resample.GroupByResampler
 
 Base class
 ----------
 
 :class:`~healpix_resample.knn.KNeighborsResampler` is the base class inherited by all resamplers above.
-Use it directly only if you need to implement a custom weighting scheme via :meth:`comp_matrix`.
+Use it directly only if you need to implement a custom weighting scheme via :meth:`~healpix_resample.knn.KNeighborsResampler.comp_matrix`.
 
 .. autosummary::
    :toctree: generated

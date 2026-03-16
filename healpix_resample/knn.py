@@ -283,9 +283,9 @@ class KNeighborsResampler(Generic[T_Array]):
       - M: operator of shape (N, K)   (named ``M`` here)
       - MT: operator of shape (K, N)  (named ``MT`` here)
 
-    The solver estimates ``hval`` (B,K) such that:
-        M @ hval.T  matches  val (B,N)
-    by solving a damped normal equation around a reference field x_ref = val @ M.
+    The solver estimates ``hval`` (B,K) such that
+    ``M @ hval.T`` matches ``val`` (B,N),
+    by solving a damped normal equation around a reference field ``x_ref = val @ M``.
     """
 
     def __init__(
