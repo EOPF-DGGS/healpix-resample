@@ -99,7 +99,7 @@ autodoc_typehints = "none"
 
 # Suppress warnings for inherited methods in autosummary-generated pages
 nitpick_ignore_regex = [
-    (r"py:obj", r"healpix_resample\.\w+\.(comp_matrix|get_cell_ids|invert|resample)"),
+    (r"py:(obj|meth)", r"healpix_resample\.(\w+\.)*\w+\.(comp_matrix|get_cell_ids|invert|resample)"),
 ]
 
 napoleon_numpy_docstring = True
