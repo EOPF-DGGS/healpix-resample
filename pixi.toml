@@ -1,0 +1,61 @@
+[workspace]
+authors = ["Camille Gueguen"]
+channels = ["conda-forge"]
+name = "healpix-resample"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+numpy = ">=2.4.2,<3"
+python = ">=3.10,<3.14"
+jupyterlab = ">=4.5.5,<5"
+pytorch = ">=2.0,<3"
+
+[pypi-dependencies]
+healpix-resample= { path = ".", editable = true }
+healpix-geo = "*"
+foscat = "*"
+
+[feature.affine.dependencies]
+affine = "*"
+
+[feature.test.dependencies]
+pytest = "*"
+pytest-cov = "*"
+
+[feature.docs.dependencies]
+fftw = "*"
+sphinx = "*"
+pydata-sphinx-theme = "*"
+myst-nb = "*"
+sphinx-autobuild = "*"
+geopandas = "*"
+tabulate = "*"
+markdown = "*"
+pandas = "*"
+pyresample = "*"
+sphinx-design = "*"
+pyproj = "*"
+matplotlib-base = ">=3.7,<4"
+
+[feature.test.tasks]
+tests = { cmd = "pytest --cov=healpix_resample" }
+
+[feature.docs.tasks]
+build-docs = { cmd = "rm -rf generated/; python -m sphinx -b html -w warnings.log -W -Tn -j auto . _build", cwd = "docs" }
+autobuild-docs = { cmd = "sphinx-autobuild -b html -w warnings.log -W -Tn -j auto . _build", cwd = "docs" }
+build-docs-rtd = { cmd = "python -m sphinx -b html -W -T -j auto . $READTHEDOCS_OUTPUT/html", cwd = "docs" }
+
+[feature.dev.dependencies]
+ipython = "*"
+jupyterlab = "*"
+black = "*"
+jupyter-resource-usage = "*"
+jupyterlab_code_formatter = "*"
+isort = "*"
+
+[environments]
+default = ["test", "dev", "affine"]
+docs = ["docs"]
