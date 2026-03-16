@@ -21,7 +21,7 @@ from healpix_resample import (
     NearestResampler,
     BilinearResampler,
     PSFResampler,
-    ZuniqNearestResampler,
+    CellPointResampler,
 )
 
 # Shared dataset: a small structured grid near the origin
@@ -75,12 +75,12 @@ mse_psf = np.mean((rval_psf - val) ** 2)
 print(f"PSF      — output cells: {res_psf.cell_data.shape[0]}, MSE: {mse_psf:.2e}")
 print(f"           CG iterations: {res_psf.cg_niters}")
 ```
-### `ZuniqNearestResampler`
+### `CellPointResampler`
 
-Special mode: encodes each point as a Zuniq HEALPix cell ID at level 29. No interpolation — used for exact point indexing.
+Special mode: encodes each point as a HEALPix cell ID at level 29. No interpolation — used for exact point indexing.
 
 ```{code-cell} python
-nr_zuniq = ZuniqNearestResampler(lon_deg=lon, lat_deg=lat)
+nr_zuniq = CellPointResampler(lon_deg=lon, lat_deg=lat)
 res_zuniq = nr_zuniq.resample(val)
 
 rval_zuniq = nr_zuniq.invert(res_zuniq.cell_data)
