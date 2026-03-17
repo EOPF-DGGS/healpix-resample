@@ -93,7 +93,7 @@ def least_squares_cg(M,
         MT,
         y,
         x_ref,
-        x0, 
+        x0,
         max_iter = 200,
         tol = 1e-6,
         damp = 0.0,
@@ -143,6 +143,12 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
         """
         PSF regridding Set.
         """
+        self.lam = kwargs.get('lam', None)
+        self.tol = kwargs.get('tol', None)
+        self.max_iter = kwargs.get('max_iter', None)
+        kwargs.pop('lam', None)
+        kwargs.pop('tol', None)
+        kwargs.pop('max_iter', None)
         super().__init__(
             lon_deg=lon_deg,
             lat_deg=lat_deg,
@@ -162,7 +168,7 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
         # --- weights per sample->cell link
         # w = exp(-2*d^2/sigma^2)
         w = torch.exp((-2.0) * (self.d_m * self.d_m) / (self.sigma_m * self.sigma_m))
-        
+
         # Build (N,K) operator M and (K,N) operator MT.
         # We avoid numpy bincount; use torch.bincount on GPU.
 
@@ -180,7 +186,7 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
         norm_col = torch.bincount(flat_hi_v, weights=flat_w_v, minlength=self.K).to(self.dtype)
         # weight divided by column sum
         wM = flat_w_v / norm_col[flat_hi_v]
-        
+
         rowsM = idx.reshape(-1)[valid]
         colsM = flat_hi_v
         indicesM = torch.stack([rowsM, colsM], dim=0)
@@ -191,7 +197,7 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
             device=self.device,
             dtype=self.dtype,
         ).coalesce()
-            
+
         # --- after initial M_coo = ... .coalesce()
 
         # -------- MT : (K,N) (normalized per row / per input sample)
@@ -200,7 +206,7 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
         flat_idx_v = flat_idx[valid]
         norm_row = torch.bincount(flat_idx_v, weights=flat_w_v, minlength=self.N).to(self.dtype)
         wMT = flat_w_v / norm_row[flat_idx_v]
-            
+
         indicesMT = torch.stack([colsM, rowsM], dim=0)  # (hi, idx)
         MT_coo = torch.sparse_coo_tensor(
                 indicesMT,
@@ -209,8 +215,8 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
                 device=self.device,
                 dtype=self.dtype,
             ).coalesce()
-            
-        
+
+
         cell_out_ids = getattr(self, "cell_out_ids", None)
         if cell_out_ids is None:
             cell_out_ids = getattr(self, "out_cell_ids", None)
@@ -218,9 +224,9 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
         if cell_out_ids is not None:
             # weak/empty columns in M (per output healpix cell k)
             bad_k = torch.nonzero(norm_col <= self.threshold).reshape(-1)
-              
+
             if bad_k.numel() > 0:
-                
+
                 # Require geometry buffers (unit vectors)
                 if (not hasattr(self, "xyz_samples")) or (not hasattr(self, "xyz_cells")):
                     raise RuntimeError(
@@ -249,7 +255,7 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
                 sigma = float(self.sigma_m) if hasattr(self, "sigma_m") else 1.0
 
                 add_rows, add_cols, add_vals = [], [], []
-                
+
                 # For each bad column, pick the closest source sample
                 for kb in range(len(bad_k)):
                     kb = int(kb)
@@ -263,7 +269,7 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
 
                     # take top-Npt_fallback closest (largest dot = smallest angular distance)
                     topv, topi = torch.topk(dots, k=min(Npt_fallback, self.N), largest=False)
-                    
+
                     add_rows.append(topi.to(torch.long))
                     add_cols.append(torch.tensor(bad_k[kb:kb+1], dtype=torch.long))
                     add_vals.append(torch.ones([1], dtype=self.dtype,device=self.device))
@@ -271,12 +277,12 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
                 add_rows = torch.cat(add_rows, dim=0)
                 add_cols = torch.cat(add_cols, dim=0)
                 add_vals = torch.cat(add_vals, dim=0)
-                
+
                 # rebuild M and coalesce
                 new_rows = torch.cat([base_rows, add_rows], dim=0)
                 new_cols = torch.cat([base_cols, add_cols], dim=0)
                 new_vals = torch.cat([base_vals, add_vals], dim=0)
-                
+
                 M_coo = torch.sparse_coo_tensor(
                     torch.stack([new_rows, new_cols], dim=0),
                     new_vals,
@@ -284,14 +290,14 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
                     device=self.device,
                     dtype=self.dtype,
                 ).coalesce()
-                
-                
+
+
             # do the same fo the transpose
             # weak/empty columns in M (per output healpix cell k)
             bad_k = torch.nonzero(norm_row <= self.threshold).reshape(-1)
-              
+
             if bad_k.numel() > 0:
-                
+
                 # Require geometry buffers (unit vectors)
                 if (not hasattr(self, "xyz_samples")) or (not hasattr(self, "xyz_cells")):
                     raise RuntimeError(
@@ -320,7 +326,7 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
                 sigma = float(self.sigma_m) if hasattr(self, "sigma_m") else 1.0
 
                 add_rows, add_cols, add_vals = [], [], []
-                
+
                 # For each bad column, pick the closest source sample
                 for kb in range(len(bad_k)):
                     kb = int(kb)
@@ -334,7 +340,7 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
 
                     # take top-Npt_fallback closest (largest dot = smallest angular distance)
                     topv, topi = torch.topk(dots, k=min(Npt_fallback, self.K), largest=False)
-                    
+
                     add_rows.append(topi.to(torch.long))
                     add_cols.append(torch.tensor(bad_k[kb:kb+1], dtype=torch.long))
                     add_vals.append(torch.ones([1], dtype=self.dtype,device=self.device))
@@ -342,20 +348,20 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
                 add_rows = torch.cat(add_rows, dim=0)
                 add_cols = torch.cat(add_cols, dim=0)
                 add_vals = torch.cat(add_vals, dim=0)
-                
+
                 # rebuild M and coalesce
                 new_rows = torch.cat([base_rows, add_rows], dim=0)
                 new_cols = torch.cat([base_cols, add_cols], dim=0)
                 new_vals = torch.cat([base_vals, add_vals], dim=0)
-                
+
                 MT_coo = torch.sparse_coo_tensor(
                     torch.stack([new_rows, new_cols], dim=0),
                     new_vals,
                     size=(self.K, self.N),
                     device=self.device,
                     dtype=self.dtype,
-                ).coalesce() 
-                
+                ).coalesce()
+
         # Convert to CSR for faster spMM (recommended on GPU)
         self.M  = M_coo #.to_sparse_csr()
         del M_coo
@@ -386,6 +392,9 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
             hval: (B,K) or (K,)
             (optional) info: CG information dict
         """
+        lam = lam if (self.lam is not None or lam != 0.0) else self.lam
+        tol = tol if (self.tol is not None or tol != 1e-8) else self.tol
+        max_iter = max_iter if (self.max_iter is not None or max_iter != 100) else self.max_iter
         y = val if isinstance(val, torch.Tensor) else torch.as_tensor(val)
         y = y.to(self.device, dtype=self.dtype)
         clean_shape=False
@@ -395,7 +404,7 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
 
         # reference field (B,K)
         x_ref = y @ self.M
-        
+
         if x0 is None:
             x0 = torch.zeros_like(x_ref)
         else:
@@ -412,8 +421,8 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
             damp=float(lam),
             verbose=self.verbose,
         )
-        
-        hval = delta + x_ref 
+
+        hval = delta + x_ref
         if val is not None and val.ndim == 1:
             hval = hval[0]
 
@@ -433,4 +442,4 @@ class PSFResampler(KNeighborsResampler, Generic[T_Array]):
             cg_residual_norms=cg_residual_norms,
             cg_niters=cg_niters
         )
-  
+
