@@ -33,3 +33,5 @@ include = [
     "healpix_resample",
     "healpix_resample.*",
 ]
+
+[tool.setuptools_scm]
