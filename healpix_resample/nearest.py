@@ -94,103 +94,134 @@ class NearestResampler(KNeighborsResampler):
         self._inverse_ready = True
         self.comp_matrix()
 
-    @staticmethod
-    def _auto_chunk_sizes(
-        K: int,
-        N: int,
-        bytes_per_elem: int,
-        device: torch.device,
-        mem_fraction: float = 0.25,
-        min_chunk: int = 256,
-    ):
-        """Return (chunk_k, chunk_n) that fit inside the available device memory.
-
-        Strategy: reserve ``mem_fraction`` of free VRAM for the GEMM tile
-        (chunk_k, chunk_n). We maximise chunk_k first (row-major sweep over K)
-        then set chunk_n as large as possible.
-
-        On CPU falls back to safe defaults (no VRAM query possible).
-        """
-        if device.type == "cuda":
-            torch.cuda.synchronize(device)
-            free_bytes, _ = torch.cuda.mem_get_info(device)
-            budget = int(free_bytes * mem_fraction)
-        else:
-            # CPU: use a conservative 256 MB tile
-            budget = 256 * 1024 * 1024
-
-        # tile memory = chunk_k * chunk_n * bytes_per_elem
-        # Fix chunk_k = min(K, 4096) then solve for chunk_n.
-        chunk_k = min(K, max(min_chunk, 4096))
-        chunk_n = budget // (chunk_k * bytes_per_elem)
-        chunk_n = max(min_chunk, min(N, chunk_n))
-
-        # If even a single row doesn't fit, shrink chunk_k to compensate.
-        if chunk_n < min_chunk:
-            chunk_n = min_chunk
-            chunk_k = max(min_chunk, budget // (chunk_n * bytes_per_elem))
-            chunk_k = min(K, chunk_k)
-
-        return int(chunk_k), int(chunk_n)
-
     def _compute_inverse_hi(self) -> torch.Tensor:
         """For each output HEALPix cell find the index of its nearest source sample.
 
-        Double-chunked GEMM over (K, N) with automatic tile sizing based on
-        available VRAM — no OOM regardless of K or N.
+        Hierarchical algorithm exploiting the HEALPix nested structure:
 
-        Algorithm:
-            For every cell k, argmax_n dot(xyz_cell[k], xyz_sample[n]) is
-            equivalent to argmin geodesic_distance, but requires no acos().
-            We maintain running (best_dot, best_idx) per cell and sweep over
-            N in chunks, updating only when a better candidate is found.
+        Level L   (dl=0): assign each source to its own nested cell.
+                          For every out_cell_id that has ≥1 source, keep the nearest.
+        Level L-1 (dl=1): remaining empty cells are mapped to their parent (cell//4).
+                          Search for nearest source among all samples in the parent cell.
+        ...
+        Level 0          : at most 12 cells cover the whole sphere — everything is filled.
 
-        Memory per iteration: chunk_k * chunk_n * bytes_per_elem  (one tile).
+        Complexity: O(N·log N) per level  vs  O(K·N) for brute force.
+        Memory:     O(N + K) — no large intermediate matrix.
+
+        The scatter-argmax (best source per target cell) is fully vectorised via a
+        double stable-sort trick, with no Python loop over individual cells.
 
         Returns:
-            hi: (K,) long tensor — index of nearest source sample per cell.
+            hi : (K,) long tensor — index of nearest source sample per cell.
         """
-        xyz_s = self.xyz_samples                     # (N, 3)
-        xyz_c = self.xyz_cells.to(xyz_s.dtype)       # (K, 3)
-        K, N = self.K, self.N
-        bpe = xyz_s.element_size()                   # 4 (fp32) or 8 (fp64)
+        xyz_s = self.xyz_samples                      # (N, 3)
+        xyz_c = self.xyz_cells.to(xyz_s.dtype)        # (K, 3)
+        K, N  = self.K, self.N
+        dev   = self.device
 
-        chunk_k, chunk_n = self._auto_chunk_sizes(K, N, bpe, self.device)
+        # ── lon/lat of source samples (needed by healpix_geo at each level) ──
+        xyz_cpu = xyz_s.cpu().numpy().astype(np.float64)
+        lon_np  = np.degrees(np.arctan2(xyz_cpu[:, 1], xyz_cpu[:, 0]))
+        lat_np  = np.degrees(np.arcsin(np.clip(xyz_cpu[:, 2], -1.0, 1.0)))
 
-        if self.verbose:
-            print(
-                f"[NearestResampler] inverse KNN  K={K:,}  N={N:,}  "
-                f"tile=({chunk_k}, {chunk_n})  "
-                f"dtype={'fp32' if bpe==4 else 'fp64'}"
-            )
+        out_np = self.cell_ids.cpu().numpy().astype(np.int64)   # (K,) at level L
 
-        best_dot = torch.full((K,), -2.0, device=self.device, dtype=xyz_s.dtype)
-        hi       = torch.zeros(K,          device=self.device, dtype=torch.long)
+        hi        = torch.full((K,), -1, dtype=torch.long, device=dev)
+        remaining = torch.ones(K, dtype=torch.bool, device=dev)  # True = not yet filled
 
-        for k0 in range(0, K, chunk_k):
-            k1   = min(k0 + chunk_k, K)
-            ck   = xyz_c[k0:k1]                      # (ck, 3)
-            ck_best_dot = best_dot[k0:k1].clone()
-            ck_hi       = hi[k0:k1].clone()
+        for dl in range(self.level + 1):
+            n_rem = int(remaining.sum().item())
+            if n_rem == 0:
+                break
 
-            for n0 in range(0, N, chunk_n):
-                n1   = min(n0 + chunk_n, N)
-                cn   = xyz_s[n0:n1]                  # (cn, 3)
+            cur_level = self.level - dl
 
-                # (ck, cn) dot products — the only large allocation
-                dots = ck @ cn.T                     # (ck, cn)
+            # ── 1. Source cells at current level (nested) ──────────────────
+            src_cells = healpix_geo.nested.lonlat_to_healpix(
+                lon_np, lat_np, cur_level
+            ).astype(np.int64)                                   # (N,)
 
-                local_max, local_idx = dots.max(dim=1)   # (ck,)
+            # ── 2. Remaining targets mapped to current level ───────────────
+            rem_idx = remaining.nonzero(as_tuple=False).squeeze(1)   # (R,)
+            rem_np  = rem_idx.cpu().numpy()
+            # In nested, parent at level L-dl = cell_id >> (2*dl)  (i.e. // 4^dl)
+            tgt_cells = (out_np[rem_np] >> (2 * dl)).astype(np.int64)  # (R,)
 
-                better = local_max > ck_best_dot
-                ck_best_dot = torch.where(better, local_max, ck_best_dot)
-                ck_hi       = torch.where(better, local_idx + n0, ck_hi)
+            # ── 3. Join: build all (src_n, tgt_k) pairs sharing the same cell ──
+            #
+            # Strategy: sort targets by cell, then for each source binary-search
+            # its range in the sorted target array.  The index expansion is done
+            # with pure numpy without a Python loop over cells.
 
-                # free immediately to keep peak memory = one tile
-                del dots, local_max, local_idx, better
+            tgt_ord    = np.argsort(tgt_cells, kind="stable")
+            tgt_sorted = tgt_cells[tgt_ord]        # cell IDs of targets, sorted
+            rem_sorted = rem_np[tgt_ord]           # original k indices, same order
 
-            best_dot[k0:k1] = ck_best_dot
-            hi[k0:k1]       = ck_hi
+            lo   = np.searchsorted(tgt_sorted, src_cells, side="left")
+            hi_b = np.searchsorted(tgt_sorted, src_cells, side="right")
+            counts = (hi_b - lo).astype(np.int64)  # (N,) matches per source
+
+            valid_mask = counts > 0
+            if not valid_mask.any():
+                if self.verbose:
+                    print(f"[NearestResampler] dl={dl} level={cur_level}: "
+                          f"no source↔target matches, skipping")
+                continue
+
+            valid_n      = np.where(valid_mask)[0]   # source indices with ≥1 target
+            valid_counts = counts[valid_n]
+            total_pairs  = int(valid_counts.sum())
+
+            # Expand: src_pairs[i] = source index for pair i  (np.repeat, no loop)
+            src_pairs = np.repeat(valid_n, valid_counts)   # (total_pairs,)
+
+            # tgt_pairs[i] = original k index for pair i
+            # For source valid_n[j], matching targets are rem_sorted[lo[j]:hi_b[j]].
+            # We build the flat index array into rem_sorted without a Python loop:
+            cum = np.zeros(len(valid_n) + 1, dtype=np.int64)
+            np.cumsum(valid_counts, out=cum[1:])
+            local_off  = np.arange(total_pairs, dtype=np.int64) - np.repeat(cum[:-1], valid_counts)
+            abs_idx    = np.repeat(lo[valid_n], valid_counts) + local_off
+            tgt_pairs  = rem_sorted[abs_idx]           # (total_pairs,) original k indices
+
+            # ── 4. Vectorised scatter-argmax on GPU ────────────────────────
+            #
+            # For each target k, we want:  hi[k] = argmax_{n: pair→k} dot(xyz_c[k], xyz_s[n])
+            #
+            # Trick: sort pairs by dot desc, then stable-sort by k asc
+            # → first occurrence of each k in the final array = best dot for that k.
+
+            src_t = torch.from_numpy(src_pairs.astype(np.int64)).to(dev)  # (M,)
+            tgt_t = torch.from_numpy(tgt_pairs.astype(np.int64)).to(dev)  # (M,)
+
+            # Element-wise dot product for each pair (no large matrix)
+            dots = (xyz_c[tgt_t] * xyz_s[src_t]).sum(dim=1)               # (M,)
+
+            # Step 1 – sort by dot descending (best first within each future group)
+            ord1 = torch.argsort(dots, descending=True, stable=True)
+            src1 = src_t[ord1]
+            tgt1 = tgt_t[ord1]
+
+            # Step 2 – stable sort by k ascending (preserves dot order within k)
+            ord2 = torch.argsort(tgt1, stable=True)
+            src2 = src1[ord2]
+            tgt2 = tgt1[ord2]
+
+            # Step 3 – first occurrence of each k = best dot for that k
+            is_first        = torch.ones(len(tgt2), dtype=torch.bool, device=dev)
+            is_first[1:]    = tgt2[1:] != tgt2[:-1]
+
+            best_tgt = tgt2[is_first]   # (unique_k,)
+            best_src = src2[is_first]   # (unique_k,) nearest source index
+
+            hi[best_tgt]        = best_src
+            remaining[best_tgt] = False
+
+            if self.verbose:
+                print(f"[NearestResampler] dl={dl} level={cur_level:>2}: "
+                      f"filled {len(best_tgt):>{len(str(K))}}, "
+                      f"remaining {int(remaining.sum()):>{len(str(K))}}/{K}")
 
         return hi
 
