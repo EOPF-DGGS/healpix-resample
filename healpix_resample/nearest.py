@@ -94,33 +94,103 @@ class NearestResampler(KNeighborsResampler):
         self._inverse_ready = True
         self.comp_matrix()
 
-    def _compute_inverse_hi(self, chunk_size: int = 8192) -> torch.Tensor:
+    @staticmethod
+    def _auto_chunk_sizes(
+        K: int,
+        N: int,
+        bytes_per_elem: int,
+        device: torch.device,
+        mem_fraction: float = 0.25,
+        min_chunk: int = 256,
+    ):
+        """Return (chunk_k, chunk_n) that fit inside the available device memory.
+
+        Strategy: reserve ``mem_fraction`` of free VRAM for the GEMM tile
+        (chunk_k, chunk_n). We maximise chunk_k first (row-major sweep over K)
+        then set chunk_n as large as possible.
+
+        On CPU falls back to safe defaults (no VRAM query possible).
+        """
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+            free_bytes, _ = torch.cuda.mem_get_info(device)
+            budget = int(free_bytes * mem_fraction)
+        else:
+            # CPU: use a conservative 256 MB tile
+            budget = 256 * 1024 * 1024
+
+        # tile memory = chunk_k * chunk_n * bytes_per_elem
+        # Fix chunk_k = min(K, 4096) then solve for chunk_n.
+        chunk_k = min(K, max(min_chunk, 4096))
+        chunk_n = budget // (chunk_k * bytes_per_elem)
+        chunk_n = max(min_chunk, min(N, chunk_n))
+
+        # If even a single row doesn't fit, shrink chunk_k to compensate.
+        if chunk_n < min_chunk:
+            chunk_n = min_chunk
+            chunk_k = max(min_chunk, budget // (chunk_n * bytes_per_elem))
+            chunk_k = min(K, chunk_k)
+
+        return int(chunk_k), int(chunk_n)
+
+    def _compute_inverse_hi(self) -> torch.Tensor:
         """For each output HEALPix cell find the index of its nearest source sample.
 
-        Uses chunked matrix-multiplication of unit 3-D vectors:
-            dot(cell, sample) is maximised <=> geodesic distance is minimised.
+        Double-chunked GEMM over (K, N) with automatic tile sizing based on
+        available VRAM — no OOM regardless of K or N.
 
-        This avoids an explicit N x K distance matrix and runs entirely on the
-        target device (GPU batched GEMM is highly optimised).
+        Algorithm:
+            For every cell k, argmax_n dot(xyz_cell[k], xyz_sample[n]) is
+            equivalent to argmin geodesic_distance, but requires no acos().
+            We maintain running (best_dot, best_idx) per cell and sweep over
+            N in chunks, updating only when a better candidate is found.
 
-        Args:
-            chunk_size: number of HEALPix cells processed per GEMM call.
-                        Tune to fit GPU VRAM (default 8192 is conservative).
+        Memory per iteration: chunk_k * chunk_n * bytes_per_elem  (one tile).
 
         Returns:
-            hi: (K,) long tensor — index into the N source samples.
+            hi: (K,) long tensor — index of nearest source sample per cell.
         """
-        xyz_s = self.xyz_samples                    # (N, 3)  fp32 or fp64
-        xyz_c = self.xyz_cells.to(xyz_s.dtype)      # (K, 3)
-        K = self.K
+        xyz_s = self.xyz_samples                     # (N, 3)
+        xyz_c = self.xyz_cells.to(xyz_s.dtype)       # (K, 3)
+        K, N = self.K, self.N
+        bpe = xyz_s.element_size()                   # 4 (fp32) or 8 (fp64)
 
-        hi = torch.empty(K, dtype=torch.long, device=self.device)
+        chunk_k, chunk_n = self._auto_chunk_sizes(K, N, bpe, self.device)
 
-        for start in range(0, K, chunk_size):
-            end = min(start + chunk_size, K)
-            # (chunk, 3) @ (3, N) -> (chunk, N)  dot products on unit sphere
-            dots = xyz_c[start:end] @ xyz_s.T      # (chunk, N)
-            hi[start:end] = dots.argmax(dim=1)
+        if self.verbose:
+            print(
+                f"[NearestResampler] inverse KNN  K={K:,}  N={N:,}  "
+                f"tile=({chunk_k}, {chunk_n})  "
+                f"dtype={'fp32' if bpe==4 else 'fp64'}"
+            )
+
+        best_dot = torch.full((K,), -2.0, device=self.device, dtype=xyz_s.dtype)
+        hi       = torch.zeros(K,          device=self.device, dtype=torch.long)
+
+        for k0 in range(0, K, chunk_k):
+            k1   = min(k0 + chunk_k, K)
+            ck   = xyz_c[k0:k1]                      # (ck, 3)
+            ck_best_dot = best_dot[k0:k1].clone()
+            ck_hi       = hi[k0:k1].clone()
+
+            for n0 in range(0, N, chunk_n):
+                n1   = min(n0 + chunk_n, N)
+                cn   = xyz_s[n0:n1]                  # (cn, 3)
+
+                # (ck, cn) dot products — the only large allocation
+                dots = ck @ cn.T                     # (ck, cn)
+
+                local_max, local_idx = dots.max(dim=1)   # (ck,)
+
+                better = local_max > ck_best_dot
+                ck_best_dot = torch.where(better, local_max, ck_best_dot)
+                ck_hi       = torch.where(better, local_idx + n0, ck_hi)
+
+                # free immediately to keep peak memory = one tile
+                del dots, local_max, local_idx, better
+
+            best_dot[k0:k1] = ck_best_dot
+            hi[k0:k1]       = ck_hi
 
         return hi
 
