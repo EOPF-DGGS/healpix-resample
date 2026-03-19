@@ -75,8 +75,7 @@ class NearestResampler(KNeighborsResampler):
     def __init__(self, *args, **kwargs):
         self._inverse_mode = kwargs.get("out_cell_ids") is not None
         self._inverse_ready = False
-        super().__init__(Npt=1, *args, **kwargs)
-
+        super().__init__(Npt=1,nearest=True, *args, **kwargs)
         if self._inverse_mode:
             self._setup_inverse()
 
@@ -120,6 +119,14 @@ class NearestResampler(KNeighborsResampler):
 
         # 3. hi[k] = index of nearest source sample for each cell k.
         self.hi = self._compute_inverse_hi()   # (K,)
+
+        # ── Free large geometry buffers — only needed during construction ──
+        # xyz_samples (N,3) and xyz_cells (K,3) are never accessed after hi is built.
+        del self.xyz_samples
+        del self.xyz_cells
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
         self._inverse_ready = True
 
     # ── Hierarchical inverse KNN ──────────────────────────────────────────────
@@ -195,43 +202,57 @@ class NearestResampler(KNeighborsResampler):
             valid_counts = counts[valid_n]
             total_pairs  = int(valid_counts.sum())
 
-            # Expand source indices (np.repeat — no loop).
+            # ── Pair expansion — free each temp as soon as it is consumed ────
+            # Peak CPU: 2P int64 (src_pairs + tgt_pairs) instead of 5P.
             src_pairs = np.repeat(valid_n, valid_counts)             # (P,)
 
-            # Expand target indices: for source j, targets are
-            # rem_sorted[lo[j] : hi_b[j]].  Flatten without a loop:
             cum = np.zeros(len(valid_n) + 1, dtype=np.int64)
             np.cumsum(valid_counts, out=cum[1:])
             local_off = (
                 np.arange(total_pairs, dtype=np.int64)
                 - np.repeat(cum[:-1], valid_counts)
             )
-            abs_idx   = np.repeat(lo[valid_n], valid_counts) + local_off
-            tgt_pairs = rem_sorted[abs_idx]                          # (P,)
+            del cum
+            abs_idx = np.repeat(lo[valid_n], valid_counts) + local_off
+            del local_off
+            tgt_pairs = rem_sorted[abs_idx]
+            del abs_idx
 
-            # ── 4. Scatter-argmax on GPU — double stable-sort trick ─────────
+            # ── 4. Scatter-argmax on GPU — scatter_reduce + winner filter ────
+            #
+            # Memory budget: src_t + tgt_t + dots (3P) + max_dot (K, tiny)
+            #                + is_winner (P bool) + win_tgt + win_src (≤2K)
+            # ≈ 4P elements  vs  10P for the old double-sort.
             src_t = torch.from_numpy(src_pairs.astype(np.int64)).to(dev)  # (P,)
+            del src_pairs
             tgt_t = torch.from_numpy(tgt_pairs.astype(np.int64)).to(dev)  # (P,)
+            del tgt_pairs
 
-            # Element-wise dot product per pair (memory = 3·P floats, not K·N).
-            dots = (xyz_c[tgt_t] * xyz_s[src_t]).sum(dim=1)          # (P,)
+            # Element-wise dot product — memory = P floats (no K×N matrix).
+            dots = (xyz_c[tgt_t] * xyz_s[src_t]).sum(dim=1)           # (P,)
 
-            # Step 1 — sort by dot desc: best source first within each cell.
-            ord1 = torch.argsort(dots, descending=True, stable=True)
-            src1 = src_t[ord1]
-            tgt1 = tgt_t[ord1]
+            # Step 1 — max dot per target cell (K,), one pass, O(P) time.
+            max_dot = torch.full((K,), float("-inf"), device=dev, dtype=dots.dtype)
+            max_dot.scatter_reduce_(0, tgt_t, dots, reduce="amax", include_self=True)
 
-            # Step 2 — stable sort by cell asc: preserves dot order inside groups.
-            ord2 = torch.argsort(tgt1, stable=True)
-            src2 = src1[ord2]
-            tgt2 = tgt1[ord2]
+            # Step 2 — keep only pairs that achieve the max for their target.
+            # Typically ~1 winner per cell → win_tgt/win_src are O(K) not O(P).
+            is_winner = dots >= max_dot[tgt_t]                         # (P,) bool
+            del max_dot, dots
+            win_tgt = tgt_t[is_winner]                                 # (W,) W≤K
+            win_src = src_t[is_winner]
+            del src_t, tgt_t, is_winner
 
-            # Step 3 — first occurrence of each cell = best dot for that cell.
-            is_first      = torch.ones(len(tgt2), dtype=torch.bool, device=dev)
-            is_first[1:]  = tgt2[1:] != tgt2[:-1]
-
-            best_tgt = tgt2[is_first]
-            best_src = src2[is_first]
+            # Step 3 — deduplicate ties: stable sort by target, keep first.
+            ord_w    = torch.argsort(win_tgt, stable=True)
+            win_tgt  = win_tgt[ord_w]
+            win_src  = win_src[ord_w]
+            del ord_w
+            is_first       = torch.ones(len(win_tgt), dtype=torch.bool, device=dev)
+            is_first[1:]   = win_tgt[1:] != win_tgt[:-1]
+            best_tgt = win_tgt[is_first]
+            best_src = win_src[is_first]
+            del win_tgt, win_src, is_first
 
             hi[best_tgt]        = best_src
             remaining[best_tgt] = False
