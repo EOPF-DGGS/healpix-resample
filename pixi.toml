@@ -16,7 +16,6 @@ pytorch = ">=2.0,<3"
 [pypi-dependencies]
 healpix-resample= { path = ".", editable = true }
 healpix-geo = "*"
-foscat = "*"
 
 [feature.affine.dependencies]
 affine = "*"
