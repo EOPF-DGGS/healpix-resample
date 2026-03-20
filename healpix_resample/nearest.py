@@ -75,7 +75,8 @@ class NearestResampler(KNeighborsResampler):
     def __init__(self, *args, **kwargs):
         self._inverse_mode = kwargs.get("out_cell_ids") is not None
         self._inverse_ready = False
-        super().__init__(Npt=1,nearest=True, *args, **kwargs)
+        super().__init__(Npt=1, *args, **kwargs)
+
         if self._inverse_mode:
             self._setup_inverse()
 
@@ -131,23 +132,26 @@ class NearestResampler(KNeighborsResampler):
 
     # ── Hierarchical inverse KNN ──────────────────────────────────────────────
 
-    def _compute_inverse_hi(self) -> torch.Tensor:
+    def _compute_inverse_hi(self, max_pairs: int = 100_000_000) -> torch.Tensor:
         """For each output HEALPix cell find the index of its nearest source sample.
 
         Hierarchical algorithm exploiting the HEALPix nested structure:
 
           dl=0  level=L  : match each cell to sources in its own pixel.
           dl=1  level=L-1: unmatched cells look in their parent pixel (id >> 2).
-          dl=2  level=L-2: parent pixel id >> 4 …
+          …
           dl=L  level=0  : 12 base pixels cover the whole sphere → all filled.
 
-        Complexity: O(N log N · level)  vs  O(K·N) for brute force.
-        Memory:     O(N + K)            vs  O(K·N) for brute force.
+        When all sources and targets collapse into very few (or one) parent cell,
+        the number of pairs P can reach N×K which causes an OOM.  Whenever
+        ``total_pairs > max_pairs`` the remaining cells are handled by
+        ``_chunked_knn_fallback``, a direct chunked dot-product that uses O(R)
+        memory instead of O(P=N×R).
 
-        The scatter-argmax is fully vectorised via a double stable-sort:
-          1. sort pairs by dot-product desc  → best source first per cell
-          2. stable-sort by cell index asc   → first occurrence = best source
-        No Python loop over individual cells or samples.
+        Args:
+            max_pairs: pair-expansion budget per iteration.  When exceeded the
+                       direct chunked fallback is used for the remaining cells.
+                       Default 100 M  (≈ 800 MB for int64 pairs on CPU).
 
         Returns:
             hi : (K,) long tensor — index of nearest source sample per cell.
@@ -161,6 +165,7 @@ class NearestResampler(KNeighborsResampler):
         xyz_cpu = xyz_s.cpu().numpy().astype(np.float64)
         lon_np  = np.degrees(np.arctan2(xyz_cpu[:, 1], xyz_cpu[:, 0]))
         lat_np  = np.degrees(np.arcsin(np.clip(xyz_cpu[:, 2], -1.0, 1.0)))
+        del xyz_cpu
 
         out_np    = self.cell_ids.cpu().numpy().astype(np.int64)   # (K,)
         hi        = torch.full((K,), -1, dtype=torch.long, device=dev)
@@ -182,17 +187,14 @@ class NearestResampler(KNeighborsResampler):
             rem_np    = rem_idx.cpu().numpy()
             tgt_cells = (out_np[rem_np] >> (2 * dl)).astype(np.int64) # (R,)
 
-            # ── 3. Build (src_n, tgt_k) pairs — vectorised, no Python loop ──
-            #
-            # Sort targets by cell ID, then binary-search each source cell to
-            # find its range in the sorted target array.
+            # ── 3. Count pairs before expanding ────────────────────────────
             tgt_ord    = np.argsort(tgt_cells, kind="stable")
-            tgt_sorted = tgt_cells[tgt_ord]   # sorted cell IDs of remaining targets
-            rem_sorted = rem_np[tgt_ord]      # corresponding original k indices
+            tgt_sorted = tgt_cells[tgt_ord]
+            rem_sorted = rem_np[tgt_ord]
 
             lo     = np.searchsorted(tgt_sorted, src_cells, side="left")
             hi_b   = np.searchsorted(tgt_sorted, src_cells, side="right")
-            counts = (hi_b - lo).astype(np.int64)                   # (N,)
+            counts = (hi_b - lo).astype(np.int64)
 
             valid_mask = counts > 0
             if not valid_mask.any():
@@ -202,8 +204,23 @@ class NearestResampler(KNeighborsResampler):
             valid_counts = counts[valid_n]
             total_pairs  = int(valid_counts.sum())
 
-            # ── Pair expansion — free each temp as soon as it is consumed ────
-            # Peak CPU: 2P int64 (src_pairs + tgt_pairs) instead of 5P.
+            # ── Guard: too many pairs → chunked fallback for remaining cells ─
+            # This happens when all sources and targets share a single coarse
+            # parent (e.g. dense data in a small geographic area).
+            if total_pairs > max_pairs:
+                if self.verbose:
+                    R = int(remaining.sum().item())
+                    print(
+                        f"[NearestResampler] dl={dl} level={cur_level:>2}: "
+                        f"P={total_pairs:,} > max_pairs={max_pairs:,} "
+                        f"→ chunked fallback for {R:,} remaining cells"
+                    )
+                self._chunked_knn_fallback(
+                    hi, remaining, rem_idx, xyz_s, xyz_c
+                )
+                break
+
+            # ── 4. Pair expansion ────────────────────────────────────────────
             src_pairs = np.repeat(valid_n, valid_counts)             # (P,)
 
             cum = np.zeros(len(valid_n) + 1, dtype=np.int64)
@@ -218,38 +235,29 @@ class NearestResampler(KNeighborsResampler):
             tgt_pairs = rem_sorted[abs_idx]
             del abs_idx
 
-            # ── 4. Scatter-argmax on GPU — scatter_reduce + winner filter ────
-            #
-            # Memory budget: src_t + tgt_t + dots (3P) + max_dot (K, tiny)
-            #                + is_winner (P bool) + win_tgt + win_src (≤2K)
-            # ≈ 4P elements  vs  10P for the old double-sort.
-            src_t = torch.from_numpy(src_pairs.astype(np.int64)).to(dev)  # (P,)
+            # ── 5. Scatter-argmax — scatter_reduce + winner filter ───────────
+            src_t = torch.from_numpy(src_pairs.astype(np.int64)).to(dev)
             del src_pairs
-            tgt_t = torch.from_numpy(tgt_pairs.astype(np.int64)).to(dev)  # (P,)
+            tgt_t = torch.from_numpy(tgt_pairs.astype(np.int64)).to(dev)
             del tgt_pairs
 
-            # Element-wise dot product — memory = P floats (no K×N matrix).
-            dots = (xyz_c[tgt_t] * xyz_s[src_t]).sum(dim=1)           # (P,)
+            dots = (xyz_c[tgt_t] * xyz_s[src_t]).sum(dim=1)
 
-            # Step 1 — max dot per target cell (K,), one pass, O(P) time.
             max_dot = torch.full((K,), float("-inf"), device=dev, dtype=dots.dtype)
             max_dot.scatter_reduce_(0, tgt_t, dots, reduce="amax", include_self=True)
 
-            # Step 2 — keep only pairs that achieve the max for their target.
-            # Typically ~1 winner per cell → win_tgt/win_src are O(K) not O(P).
-            is_winner = dots >= max_dot[tgt_t]                         # (P,) bool
+            is_winner = dots >= max_dot[tgt_t]
             del max_dot, dots
-            win_tgt = tgt_t[is_winner]                                 # (W,) W≤K
+            win_tgt = tgt_t[is_winner]
             win_src = src_t[is_winner]
             del src_t, tgt_t, is_winner
 
-            # Step 3 — deduplicate ties: stable sort by target, keep first.
-            ord_w    = torch.argsort(win_tgt, stable=True)
-            win_tgt  = win_tgt[ord_w]
-            win_src  = win_src[ord_w]
+            ord_w  = torch.argsort(win_tgt, stable=True)
+            win_tgt = win_tgt[ord_w]
+            win_src = win_src[ord_w]
             del ord_w
-            is_first       = torch.ones(len(win_tgt), dtype=torch.bool, device=dev)
-            is_first[1:]   = win_tgt[1:] != win_tgt[:-1]
+            is_first     = torch.ones(len(win_tgt), dtype=torch.bool, device=dev)
+            is_first[1:] = win_tgt[1:] != win_tgt[:-1]
             best_tgt = win_tgt[is_first]
             best_src = win_src[is_first]
             del win_tgt, win_src, is_first
@@ -266,6 +274,45 @@ class NearestResampler(KNeighborsResampler):
                 )
 
         return hi
+
+    # ── Chunked direct KNN fallback ───────────────────────────────────────────
+
+    def _chunked_knn_fallback(
+        self,
+        hi: torch.Tensor,           # (K,) output — filled in-place
+        remaining: torch.Tensor,    # (K,) bool mask — updated in-place
+        rem_idx: torch.Tensor,      # (R,) indices of remaining cells in [0..K-1]
+        xyz_s: torch.Tensor,        # (N, 3) source unit vectors
+        xyz_c: torch.Tensor,        # (K, 3) target cell unit vectors
+        mem_budget_bytes: int = 512 * 1024 * 1024,  # 512 MB
+    ) -> None:
+        """Direct nearest-neighbour for remaining cells via chunked dot products.
+
+        For each remaining cell r, finds argmax_n dot(xyz_c[r], xyz_s[n]).
+        Memory is bounded to ``mem_budget_bytes`` regardless of R and N.
+
+        This is the fallback when the hierarchical pair expansion would exceed
+        ``max_pairs``.  It runs in O(R × N) time but O(chunk_r × N) memory.
+        """
+        N   = xyz_s.shape[0]
+        dev = xyz_s.device
+        bpe = xyz_s.element_size()   # bytes per float element
+
+        # chunk_r × N × bpe ≤ budget  →  chunk_r = budget // (N × bpe)
+        chunk_r = max(1, mem_budget_bytes // (N * bpe))
+
+        R       = int(rem_idx.numel())
+        xyz_c_r = xyz_c[rem_idx].to(xyz_s.dtype)     # (R, 3) — only remaining
+
+        for start in range(0, R, chunk_r):
+            end   = min(start + chunk_r, R)
+            # (chunk, N) dot products — the only large allocation, bounded by budget
+            dots  = xyz_c_r[start:end] @ xyz_s.T     # (chunk, N)
+            best  = dots.argmax(dim=1)                # (chunk,)  source indices
+            del dots
+
+            hi[rem_idx[start:end]]        = best
+            remaining[rem_idx[start:end]] = False
 
     # ── resample ─────────────────────────────────────────────────────────────
 
