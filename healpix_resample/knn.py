@@ -309,7 +309,6 @@ class KNeighborsResampler(Generic[T_Array]):
         verbose: bool = True,
         out_cell_ids: T_Array | None = None,
         group_by: bool = False,
-        nearest: bool =False,
     ) -> None:
         """Pre-compute sparse operators.
 
@@ -376,63 +375,61 @@ class KNeighborsResampler(Generic[T_Array]):
             if self.out_cell_ids is not None:
                 self.xyz_samples = _lonlat_to_xyz(torch.deg2rad(lon_t),torch.deg2rad(lat_t))  # (N,3)
             
-            if not nearest: 
-                # --- get kept healpix cells + per-sample nearest indices + distances
-                cell_ids, hi, d = healpix_weighted_nearest(
-                    lon_t,
-                    lat_t,
-                    level=self.level,
-                    Npt=self.Npt,
-                    nest=self.nest,
-                    threshold=self.threshold,
-                    radius=self.radius,
-                    ellipsoid=self.ellipsoid,
-                    sigma=self.sigma_m,
-                    out_cell_ids=self.out_cell_ids,
-                    ring_weight=ring_weight,
-                    ring_search_init=ring_search_init,
-                    ring_search_max=ring_search_max,
-                    num_threads=num_threads,
-                    device_for_dist=self.device,
+            # --- get kept healpix cells + per-sample nearest indices + distances
+            cell_ids, hi, d = healpix_weighted_nearest(
+                lon_t,
+                lat_t,
+                level=self.level,
+                Npt=self.Npt,
+                nest=self.nest,
+                threshold=self.threshold,
+                radius=self.radius,
+                ellipsoid=self.ellipsoid,
+                sigma=self.sigma_m,
+                out_cell_ids=self.out_cell_ids,
+                ring_weight=ring_weight,
+                ring_search_init=ring_search_init,
+                ring_search_max=ring_search_max,
+                num_threads=num_threads,
+                device_for_dist=self.device,
+            )
+            
+
+            if cell_ids.numel() == 0:
+                raise RuntimeError(
+                    "No HEALPix cell passed the threshold. "
+                    "Lower 'threshold' or increase neighbourhood rings."
                 )
-                
 
-                if cell_ids.numel() == 0:
-                    raise RuntimeError(
-                        "No HEALPix cell passed the threshold. "
-                        "Lower 'threshold' or increase neighbourhood rings."
-                    )
-
-                # Store geometry outputs
-                self.cell_ids = cell_ids.to(torch.long).to(self.device)   # (K,)
-                self.hi = hi.to(torch.long).to(self.device)               # (N,Npt) indices into cell_ids
-                if Npt>1:
-                    self.d_m = d.to(self.dtype).to(self.device)               # (N,Npt) meters
-        if not nearest: 
-            self.K = int(self.cell_ids.numel())
+            # Store geometry outputs
+            self.cell_ids = cell_ids.to(torch.long).to(self.device)   # (K,)
+            self.hi = hi.to(torch.long).to(self.device)               # (N,Npt) indices into cell_ids
+            if Npt>1:
+                self.d_m = d.to(self.dtype).to(self.device)               # (N,Npt) meters
+        
+        self.K = int(self.cell_ids.numel())
                 
         self.N = int(lon_t.numel())
-
-        if not nearest: 
-            if self.out_cell_ids is not None:
-                
-                # --- geometry buffers for optional fallbacks (e.g. when out_cell_ids forces empty columns)
-
-                # unit vectors for output HEALPix cell centers (K,3)
-                cell_np = self.cell_ids.detach().cpu().numpy().astype(np.uint64)
-                
-                if self.nest:
-                    lon_c_deg, lat_c_deg = healpix_geo.nested.healpix_to_lonlat(cell_np, self.level, ellipsoid=self.ellipsoid)
-                else:
-                    lon_c_deg, lat_c_deg = healpix_geo.ring.healpix_to_lonlat(cell_np, self.level, ellipsoid=self.ellipsoid)
-
-                lon_c = torch.deg2rad(torch.as_tensor(lon_c_deg, device=self.device, dtype=self.xyz_samples.dtype))
-                lat_c = torch.deg2rad(torch.as_tensor(lat_c_deg, device=self.device, dtype=self.xyz_samples.dtype))
-                
-                self.xyz_cells = _lonlat_to_xyz(lon_c, lat_c)  # (K,3)
+ 
+        if self.out_cell_ids is not None:
             
-            if not self.group_by:
-                self.comp_matrix()
+            # --- geometry buffers for optional fallbacks (e.g. when out_cell_ids forces empty columns)
+
+            # unit vectors for output HEALPix cell centers (K,3)
+            cell_np = self.cell_ids.detach().cpu().numpy().astype(np.uint64)
+            
+            if self.nest:
+                lon_c_deg, lat_c_deg = healpix_geo.nested.healpix_to_lonlat(cell_np, self.level, ellipsoid=self.ellipsoid)
+            else:
+                lon_c_deg, lat_c_deg = healpix_geo.ring.healpix_to_lonlat(cell_np, self.level, ellipsoid=self.ellipsoid)
+
+            lon_c = torch.deg2rad(torch.as_tensor(lon_c_deg, device=self.device, dtype=self.xyz_samples.dtype))
+            lat_c = torch.deg2rad(torch.as_tensor(lat_c_deg, device=self.device, dtype=self.xyz_samples.dtype))
+            
+            self.xyz_cells = _lonlat_to_xyz(lon_c, lat_c)  # (K,3)
+        
+        if not self.group_by:
+            self.comp_matrix()
         
     def comp_matrix(self):
         
