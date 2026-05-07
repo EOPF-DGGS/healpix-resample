@@ -3,7 +3,7 @@ authors = ["Camille Gueguen"]
 channels = ["conda-forge"]
 name = "healpix-resample"
 platforms = ["linux-64"]
-version = "0.1.0"
+version = "2026.5.1"
 
 [tasks]
 
